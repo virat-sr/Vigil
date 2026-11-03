@@ -38,7 +38,7 @@ class HealthcheckConfig:
     tests: list[TestCase]
     schedule: str = "manual"
     alert_threshold: float = 0.15  # alert if quality drops >15% from baseline
-    scorer_model: str = "gemini-2.0-flash"
+    scorer_model: str = "gemini-3.8-flash"
     response_field: str = "response"  # field in API response containing the answer
     timeout: int = 30  # seconds per request
     name: str = "AI Healthcheck"
@@ -69,7 +69,7 @@ def load_config(path: str | Path) -> HealthcheckConfig:
         tests=tests,
         schedule=raw.get("schedule", "manual"),
         alert_threshold=raw.get("alert_threshold", 0.15),
-        scorer_model=raw.get("scorer_model", "gemini-2.0-flash"),
+        scorer_model=raw.get("scorer_model", "gemini-3.8-flash"),
         response_field=raw.get("response_field", "response"),
         timeout=raw.get("timeout", 30),
         name=raw.get("name", "AI Healthcheck"),

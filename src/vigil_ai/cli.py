@@ -162,7 +162,7 @@ name: "My AI App"
 endpoint: "http://localhost:8000/api/chat"
 response_field: "response"  # field in API JSON response containing the answer
 alert_threshold: 0.15       # alert if quality drops >15% from baseline
-scorer_model: "gemini-2.0-flash"
+scorer_model: "gemini-3.8-flash"
 timeout: 30
 
 tests:

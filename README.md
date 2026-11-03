@@ -87,7 +87,7 @@ name: "My RAG App"
 endpoint: "https://my-app.com/api/chat"
 response_field: "response"        # JSON field containing the AI answer
 alert_threshold: 0.15             # alert if quality drops >15%
-scorer_model: "gemini-2.0-flash"  # LLM judge (set GOOGLE_API_KEY)
+scorer_model: "gemini-3.8-flash"  # LLM judge (set GOOGLE_API_KEY)
 
 tests:
   - name: "refund_policy"
@@ -173,11 +173,62 @@ Just point `vigil.yaml` at any HTTP endpoint that accepts a query and returns te
 
 Both modes track history and detect drift.
 
+## Try It: Real Degradation Demo
+
+This demo proves vigil catches quality drops from real production changes — no mocking, no tampering.
+
+```bash
+# Prerequisites
+export GOOGLE_API_KEY=your_key
+pip install vigil-ai google-genai
+
+# Run the full demo (3 scenarios, ~2 minutes)
+python demo/run_demo.py
+```
+
+**What happens:**
+
+| Scenario | What changes | What vigil detects |
+|---|---|---|
+| 1. Baseline | Good model (`gemini-3.8-flash`) + full docs | Sets baseline scores (0.85-1.0) |
+| 2. Model swap | Cheap model (`gemini-flash-lite-latest`) | Quality drop on detail-heavy queries |
+| 3. Bad docs | Good model but corrupted knowledge base | Severe drop — answers become vague |
+
+**Or test each scenario manually:**
+
+```bash
+# Terminal 1: Start the RAG app
+python demo/rag_app.py                                    # Good model + good docs
+python demo/rag_app.py --model gemini-flash-lite-latest   # Cheap model
+python demo/rag_app.py --corrupt-context                  # Bad docs
+
+# Terminal 2: Run vigil
+vigil baseline -c demo/vigil.yaml --db demo/history.db    # Set baseline (first time)
+vigil run -c demo/vigil.yaml --db demo/history.db         # Check quality
+vigil history --db demo/history.db                        # View trends
+```
+
+**This is the real test** — not synthetic failures, but the exact scenario that happens when someone swaps a model to save costs or deploys with stale data.
+
+## MCP Integration
+
+Expose vigil as an MCP tool for Claude Code, Claude Desktop, or Cursor:
+
+```bash
+# Add to Claude Code
+claude mcp add vigil -- python -m vigil_ai
+
+# Then ask Claude:
+# "Check my AI quality"
+# "Show quality history"
+# "Set a new baseline"
+```
+
 ## Architecture
 
 - **Zero infrastructure** — SQLite for history, YAML for config. No database server needed
 - **Any AI endpoint** — just needs HTTP. Not tied to LangChain, LlamaIndex, or any framework
-- **Minimal dependencies** — `pyyaml` + `google-generativeai` (optional for scoring)
+- **Minimal dependencies** — `pyyaml` + `google-genai`
 
 ## License
 

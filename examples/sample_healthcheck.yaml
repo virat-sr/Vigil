@@ -5,7 +5,7 @@ name: "Mock RAG API"
 endpoint: "http://localhost:8000"
 response_field: "response"
 alert_threshold: 0.15
-scorer_model: "gemini-2.0-flash"
+scorer_model: "gemini-3.8-flash"
 timeout: 10
 
 tests:

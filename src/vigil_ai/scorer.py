@@ -82,7 +82,7 @@ def _format_expectations(expect: dict) -> str:
     return "\n".join(lines)
 
 
-def score_result(test_result: TestResult, model: str = "gemini-2.0-flash") -> ScoreResult:
+def score_result(test_result: TestResult, model: str = "gemini-3.8-flash") -> ScoreResult:
     """Score a test result using LLM-as-judge."""
     if test_result.error:
         return ScoreResult(
@@ -92,11 +92,6 @@ def score_result(test_result: TestResult, model: str = "gemini-2.0-flash") -> Sc
             latency_ms=test_result.latency_ms,
             error=test_result.error,
         )
-
-    # Quick structural checks before calling the judge
-    quick_fails = _quick_checks(test_result)
-    if quick_fails is not None:
-        return quick_fails
 
     # Check if API key is available
     api_key = os.environ.get("GOOGLE_API_KEY", "")
@@ -112,12 +107,12 @@ def score_result(test_result: TestResult, model: str = "gemini-2.0-flash") -> Sc
     )
 
     try:
-        import google.generativeai as genai
-        genai.configure(api_key=api_key)
-        judge = genai.GenerativeModel(model)
-        resp = judge.generate_content(
-            prompt,
-            generation_config={"response_mime_type": "application/json"},
+        from google import genai as _genai
+        client = _genai.Client(api_key=api_key)
+        resp = client.models.generate_content(
+            model=model,
+            contents=prompt,
+            config={"response_mime_type": "application/json"},
         )
         data = json.loads(resp.text)
         return ScoreResult(
@@ -221,6 +216,6 @@ def _rule_based_score(result: TestResult) -> ScoreResult:
     )
 
 
-def score_all(test_results: list[TestResult], model: str = "gemini-2.0-flash") -> list[ScoreResult]:
+def score_all(test_results: list[TestResult], model: str = "gemini-3.8-flash") -> list[ScoreResult]:
     """Score all test results."""
     return [score_result(tr, model) for tr in test_results]

@@ -179,7 +179,7 @@ name: "My AI App"
 endpoint: "http://localhost:8000/api/chat"
 response_field: "response"
 alert_threshold: 0.15
-scorer_model: "gemini-2.0-flash"
+scorer_model: "gemini-3.8-flash"
 timeout: 30
 
 tests:

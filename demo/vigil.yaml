@@ -1,0 +1,45 @@
+# Vigil config for testing the Acme Corp RAG app
+name: "Acme Corp RAG"
+endpoint: "http://localhost:8500"
+response_field: "response"
+alert_threshold: 0.15
+scorer_model: "gemini-3.8-flash"
+timeout: 30
+
+tests:
+  - name: "return_policy"
+    query: "What is the exact return window and what conditions apply?"
+    expect:
+      contains: ["30"]
+      min_length: 50
+      no_hallucination: true
+
+  - name: "pricing_details"
+    query: "List all plans with their exact monthly prices and user limits."
+    expect:
+      contains: ["19", "49", "199"]
+      min_length: 100
+
+  - name: "business_hours"
+    query: "What are the exact opening and closing times for each day?"
+    expect:
+      contains: ["9:00", "6:00"]
+      min_length: 40
+
+  - name: "security_certs"
+    query: "What specific security certifications does the company hold?"
+    expect:
+      contains: ["SOC 2"]
+      min_length: 40
+
+  - name: "enterprise_vs_pro"
+    query: "What specific features does Enterprise have that Pro doesn't? List them."
+    expect:
+      contains: ["SSO", "SLA"]
+      min_length: 80
+
+  - name: "support_sla"
+    query: "What is the guaranteed response time for Enterprise support?"
+    expect:
+      contains: ["1"]
+      min_length: 30
