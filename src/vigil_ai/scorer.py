@@ -1,4 +1,4 @@
-"""Scorer — LLM-as-judge scoring using Gemini (or any provider)."""
+"""Scorer — LLM-as-judge scoring. Supports OpenAI and Gemini. Auto-detects based on available key."""
 
 from __future__ import annotations
 
@@ -82,8 +82,63 @@ def _format_expectations(expect: dict) -> str:
     return "\n".join(lines)
 
 
-def score_result(test_result: TestResult, model: str = "gemini-3.8-flash") -> ScoreResult:
-    """Score a test result using LLM-as-judge."""
+# ── Provider-specific judge calls ───────────────────────────────
+
+def _call_openai_judge(prompt: str, model: str) -> dict:
+    """Call OpenAI as LLM judge."""
+    from openai import OpenAI
+    client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+    resp = client.chat.completions.create(
+        model=model,
+        messages=[{"role": "user", "content": prompt}],
+        response_format={"type": "json_object"},
+        temperature=0,
+    )
+    return json.loads(resp.choices[0].message.content)
+
+
+def _call_gemini_judge(prompt: str, model: str) -> dict:
+    """Call Gemini as LLM judge."""
+    from google import genai as _genai
+    client = _genai.Client(api_key=os.environ["GOOGLE_API_KEY"])
+    resp = client.models.generate_content(
+        model=model,
+        contents=prompt,
+        config={"response_mime_type": "application/json"},
+    )
+    return json.loads(resp.text)
+
+
+def _detect_provider(model: str) -> str:
+    """Auto-detect which provider to use based on model name and available keys."""
+    openai_key = os.environ.get("OPENAI_API_KEY", "")
+    google_key = os.environ.get("GOOGLE_API_KEY", "")
+
+    # Explicit model name detection
+    if model.startswith("gpt-") or model.startswith("o1") or model.startswith("o3"):
+        if openai_key:
+            return "openai"
+    if model.startswith("gemini"):
+        if google_key:
+            return "gemini"
+
+    # Fallback: use whichever key is available (prefer OpenAI)
+    if openai_key:
+        return "openai"
+    if google_key:
+        return "gemini"
+    return "none"
+
+
+# Default models per provider
+DEFAULT_MODELS = {
+    "openai": "gpt-4o-mini",
+    "gemini": "gemini-3.8-flash",
+}
+
+
+def score_result(test_result: TestResult, model: str = "") -> ScoreResult:
+    """Score a test result using LLM-as-judge. Auto-detects OpenAI or Gemini."""
     if test_result.error:
         return ScoreResult(
             test_name=test_result.test.name,
@@ -93,28 +148,26 @@ def score_result(test_result: TestResult, model: str = "gemini-3.8-flash") -> Sc
             error=test_result.error,
         )
 
-    # Check if API key is available
-    api_key = os.environ.get("GOOGLE_API_KEY", "")
-    if not api_key:
-        # No LLM judge available — fall back to rule-based scoring
+    provider = _detect_provider(model)
+    if provider == "none":
         return _rule_based_score(test_result)
 
-    # Call LLM judge
+    # Use default model if none specified or if model doesn't match provider
+    if not model or (provider == "openai" and model.startswith("gemini")) or (provider == "gemini" and model.startswith("gpt")):
+        model = DEFAULT_MODELS[provider]
+
     prompt = JUDGE_PROMPT.format(
         query=test_result.test.query,
-        response=test_result.response_text[:3000],  # truncate for cost
+        response=test_result.response_text[:3000],
         expectations=_format_expectations(test_result.test.expect),
     )
 
     try:
-        from google import genai as _genai
-        client = _genai.Client(api_key=api_key)
-        resp = client.models.generate_content(
-            model=model,
-            contents=prompt,
-            config={"response_mime_type": "application/json"},
-        )
-        data = json.loads(resp.text)
+        if provider == "openai":
+            data = _call_openai_judge(prompt, model)
+        else:
+            data = _call_gemini_judge(prompt, model)
+
         return ScoreResult(
             test_name=test_result.test.name,
             score=float(data.get("score", 0.0)),
@@ -122,40 +175,9 @@ def score_result(test_result: TestResult, model: str = "gemini-3.8-flash") -> Sc
             latency_ms=test_result.latency_ms,
         )
     except Exception as e:
-        # LLM judge failed — fall back to rule-based
         fallback = _rule_based_score(test_result)
-        fallback.reasoning = f"LLM judge failed ({e}), used rule-based scoring: {fallback.reasoning}"
+        fallback.reasoning = f"LLM judge failed ({type(e).__name__}: {e}), rule-based: {fallback.reasoning}"
         return fallback
-
-
-def _quick_checks(result: TestResult) -> ScoreResult | None:
-    """Fast deterministic checks before calling LLM judge. Returns ScoreResult on fail, None on pass."""
-    expect = result.test.expect
-    response = result.response_text
-
-    # Check "contains" keywords
-    if "contains" in expect:
-        keywords = expect["contains"]
-        missing = [kw for kw in keywords if kw.lower() not in response.lower()]
-        if missing:
-            return ScoreResult(
-                test_name=result.test.name,
-                score=max(0.0, 1.0 - len(missing) * 0.3),
-                reasoning=f"Missing required keywords: {missing}",
-                latency_ms=result.latency_ms,
-            )
-
-    # Check min_length
-    if "min_length" in expect:
-        if len(response) < expect["min_length"]:
-            return ScoreResult(
-                test_name=result.test.name,
-                score=0.3,
-                reasoning=f"Response too short: {len(response)} chars (need {expect['min_length']})",
-                latency_ms=result.latency_ms,
-            )
-
-    return None  # All quick checks passed, proceed to LLM judge
 
 
 def _rule_based_score(result: TestResult) -> ScoreResult:
@@ -200,22 +222,21 @@ def _rule_based_score(result: TestResult) -> ScoreResult:
             reasons.append("no numbers found")
 
     if checks_total == 0:
-        # No rule-based checks possible — give a neutral score based on response existence
         score = 0.7 if len(response) > 20 else 0.4
         return ScoreResult(
             test_name=result.test.name, score=score,
-            reasoning=f"Rule-based (no API key): response exists ({len(response)} chars)",
+            reasoning=f"Rule-based: response exists ({len(response)} chars)",
             latency_ms=result.latency_ms,
         )
 
     score = round(checks_passed / checks_total, 2)
     return ScoreResult(
         test_name=result.test.name, score=score,
-        reasoning=f"Rule-based (no API key): {'; '.join(reasons)}",
+        reasoning=f"Rule-based: {'; '.join(reasons)}",
         latency_ms=result.latency_ms,
     )
 
 
-def score_all(test_results: list[TestResult], model: str = "gemini-3.8-flash") -> list[ScoreResult]:
-    """Score all test results."""
+def score_all(test_results: list[TestResult], model: str = "") -> list[ScoreResult]:
+    """Score all test results. Auto-detects provider from env vars and model name."""
     return [score_result(tr, model) for tr in test_results]

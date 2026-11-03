@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -13,6 +14,21 @@ from .scorer import score_all
 from .tracker import Tracker
 
 DEFAULT_CONFIG = "vigil.yaml"
+
+
+def _load_dotenv():
+    """Load .env file if it exists. No dependency needed."""
+    env_path = Path(".env")
+    if not env_path.exists():
+        return
+    for line in env_path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key, value = key.strip(), value.strip()
+        if value and key not in os.environ:  # don't override existing env vars
+            os.environ[key] = value
 DEFAULT_DB = "vigil_history.db"
 
 
@@ -162,7 +178,9 @@ name: "My AI App"
 endpoint: "http://localhost:8000/api/chat"
 response_field: "response"  # field in API JSON response containing the answer
 alert_threshold: 0.15       # alert if quality drops >15% from baseline
-scorer_model: "gemini-3.8-flash"
+# scorer_model: "gpt-4o-mini"       # OpenAI (set OPENAI_API_KEY)
+# scorer_model: "gemini-3.8-flash"  # Gemini (set GOOGLE_API_KEY)
+scorer_model: ""                     # empty = auto-detect from available API key
 timeout: 30
 
 tests:
@@ -201,6 +219,8 @@ tests:
 
 
 def main():
+    _load_dotenv()
+
     parser = argparse.ArgumentParser(
         prog="vigil",
         description="Uptime monitoring for AI quality. Proactive testing, drift detection, alerting.",

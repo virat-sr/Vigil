@@ -9,7 +9,7 @@ import pytest
 
 from vigil_ai.config import HealthcheckConfig, TestCase, load_config
 from vigil_ai.runner import TestResult
-from vigil_ai.scorer import ScoreResult, _quick_checks
+from vigil_ai.scorer import ScoreResult, _rule_based_score
 from vigil_ai.tracker import Tracker
 
 
@@ -55,34 +55,37 @@ tests:
 
 # ── Quick Checks (no LLM needed) ───────────────────────────────
 
-class TestQuickChecks:
+class TestRuleBasedScoring:
+    """Tests rule-based scoring (used when no LLM API key is available)."""
+
     def _make_result(self, response: str, expect: dict) -> TestResult:
         tc = TestCase(name="test", query="q", expect=expect)
         return TestResult(test=tc, response_text=response, status_code=200, latency_ms=100)
 
     def test_contains_pass(self):
         result = self._make_result("30 days full refund", {"contains": ["30 days", "refund"]})
-        assert _quick_checks(result) is None  # None = passed
+        score = _rule_based_score(result)
+        assert score.score == 1.0
 
     def test_contains_fail(self):
         result = self._make_result("We have a return policy", {"contains": ["30 days", "refund"]})
-        score_result = _quick_checks(result)
-        assert score_result is not None
-        assert score_result.score < 0.7
+        score = _rule_based_score(result)
+        assert score.score < 0.7
 
     def test_min_length_pass(self):
         result = self._make_result("A" * 100, {"min_length": 50})
-        assert _quick_checks(result) is None
+        score = _rule_based_score(result)
+        assert score.score == 1.0
 
     def test_min_length_fail(self):
         result = self._make_result("Short", {"min_length": 50})
-        score_result = _quick_checks(result)
-        assert score_result is not None
-        assert score_result.score < 0.5
+        score = _rule_based_score(result)
+        assert score.score < 0.5
 
     def test_no_expectations(self):
-        result = self._make_result("Anything", {})
-        assert _quick_checks(result) is None  # no checks to fail
+        result = self._make_result("Anything here is fine", {})
+        score = _rule_based_score(result)
+        assert score.score == 0.7  # neutral score for response with no checks
 
 
 # ── Tracker ─────────────────────────────────────────────────────

@@ -38,7 +38,7 @@ class HealthcheckConfig:
     tests: list[TestCase]
     schedule: str = "manual"
     alert_threshold: float = 0.15  # alert if quality drops >15% from baseline
-    scorer_model: str = "gemini-3.8-flash"
+    scorer_model: str = ""  # empty = auto-detect (OpenAI if OPENAI_API_KEY set, else Gemini)
     response_field: str = "response"  # field in API response containing the answer
     timeout: int = 30  # seconds per request
     name: str = "AI Healthcheck"
