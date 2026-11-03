@@ -3,7 +3,7 @@ name: "Acme Corp RAG"
 endpoint: "http://localhost:8500"
 response_field: "response"
 alert_threshold: 0.15
-scorer_model: "gemini-3.8-flash"
+scorer_model: ""  # auto-detect from available API key
 timeout: 30
 
 tests:

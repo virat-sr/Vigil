@@ -2,17 +2,17 @@
 Vigil Demo — Detect real AI quality degradation
 ================================================
 
-This demo proves vigil catches quality drops caused by real production changes:
+Proves vigil catches quality drops from real production changes:
 
-  Scenario 1: Good model (gemini-3.8-flash) → baseline scores
-  Scenario 2: Cheap model swap (gemini-flash-lite-latest) → vigil detects degradation
-  Scenario 3: Corrupted context docs → vigil detects severe degradation
+  Scenario 1: Good model (gpt-4o-mini via OpenRouter) -> baseline
+  Scenario 2: Cheap model swap (free Llama) -> vigil detects degradation
+  Scenario 3: Corrupted docs (good model, bad context) -> vigil detects
 
-No tampering. No mocks. Real Gemini API calls. Real quality differences.
+No tampering. No mocks. Real LLM API calls. Real quality differences.
 
 Requirements:
-    export GOOGLE_API_KEY=your_key
-    pip install vigil-ai google-generativeai
+    Set OPENROUTER_API_KEY in .env (or OPENAI_API_KEY / GOOGLE_API_KEY)
+    pip install vigil-ai[openai]
 
 Usage:
     python demo/run_demo.py
@@ -29,9 +29,22 @@ VIGIL_CONFIG = str(DEMO_DIR / "vigil.yaml")
 DB_PATH = str(DEMO_DIR / "demo_history.db")
 PORT = 8500
 
+GOOD_MODEL = "openai/gpt-4o-mini"
+CHEAP_MODEL = "meta-llama/llama-3.3-8b-instruct:free"
 
-def run_server(model="gemini-3.8-flash", corrupt=False):
-    """Start the RAG app server."""
+
+def _load_env():
+    env_path = DEMO_DIR.parent / ".env"
+    if env_path.exists():
+        for line in env_path.read_text().splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, _, v = line.partition("=")
+                if v.strip() and k.strip() not in os.environ:
+                    os.environ[k.strip()] = v.strip()
+
+
+def run_server(model=GOOD_MODEL, corrupt=False):
     cmd = [sys.executable, "-Iu", str(DEMO_DIR / "rag_app.py"), "--port", str(PORT), "--model", model]
     if corrupt:
         cmd.append("--corrupt-context")
@@ -39,9 +52,11 @@ def run_server(model="gemini-3.8-flash", corrupt=False):
 
 
 def run_vigil(command="run"):
-    """Run a vigil command."""
-    cmd = [sys.executable, "-Iu", "-m", "vigil_ai.cli", command, "-c", VIGIL_CONFIG, "--db", DB_PATH]
-    subprocess.run(cmd, env={**os.environ, "PYTHONPATH": str(DEMO_DIR.parent / "src")}, timeout=120)
+    subprocess.run(
+        [sys.executable, "-Iu", "-m", "vigil_ai.cli", command, "-c", VIGIL_CONFIG, "--db", DB_PATH],
+        env={**os.environ, "PYTHONPATH": str(DEMO_DIR.parent / "src")},
+        timeout=180,
+    )
 
 
 def divider(text):
@@ -51,44 +66,39 @@ def divider(text):
 
 
 def main():
-    if not os.environ.get("GOOGLE_API_KEY"):
-        print("ERROR: Set GOOGLE_API_KEY environment variable first.")
+    _load_env()
+
+    has_key = any(os.environ.get(k) for k in ["OPENROUTER_API_KEY", "OPENAI_API_KEY", "GOOGLE_API_KEY"])
+    if not has_key:
+        print("ERROR: Set OPENROUTER_API_KEY (or OPENAI_API_KEY / GOOGLE_API_KEY) in .env")
         sys.exit(1)
 
-    # Clean slate
     Path(DB_PATH).unlink(missing_ok=True)
 
-    # ── Scenario 1: Good model → Baseline ────────────────────────
-    divider("SCENARIO 1: Good model (gemini-3.8-flash) — Setting baseline")
-    print("  Starting RAG app with gemini-3.8-flash...", flush=True)
-
-    server = run_server(model="gemini-3.8-flash")
-    time.sleep(2)
-
+    # ── Scenario 1 ───────────────────────────────────────────────
+    divider(f"SCENARIO 1: Good model ({GOOD_MODEL}) -- Setting baseline")
+    server = run_server(model=GOOD_MODEL)
+    time.sleep(3)
     run_vigil("baseline")
     server.terminate()
     time.sleep(1)
 
-    # ── Scenario 2: Cheap model swap ─────────────────────────────
-    divider("SCENARIO 2: Cost-cutting model swap (gemini-flash-lite-latest)")
-    print("  Simulating: team swaps to cheaper model to save costs...", flush=True)
+    # ── Scenario 2 ───────────────────────────────────────────────
+    divider(f"SCENARIO 2: Cost-cutting swap ({CHEAP_MODEL})")
+    print("  Simulating: team swaps to free model to save costs...", flush=True)
     print("  This is the #1 cause of silent AI quality degradation.\n", flush=True)
-
-    server = run_server(model="gemini-flash-lite-latest")
-    time.sleep(2)
-
+    server = run_server(model=CHEAP_MODEL)
+    time.sleep(3)
     run_vigil("run")
     server.terminate()
     time.sleep(1)
 
-    # ── Scenario 3: Corrupted context docs ───────────────────────
-    divider("SCENARIO 3: Corrupted knowledge base (outdated docs)")
-    print("  Simulating: someone deploys with stale/corrupted docs...", flush=True)
-    print("  RAG returns vague answers because context is garbage.\n", flush=True)
-
-    server = run_server(model="gemini-3.8-flash", corrupt=True)
-    time.sleep(2)
-
+    # ── Scenario 3 ───────────────────────────────────────────────
+    divider("SCENARIO 3: Corrupted knowledge base")
+    print("  Simulating: deploy with stale/corrupted docs...", flush=True)
+    print("  Good model but garbage context = vague answers.\n", flush=True)
+    server = run_server(model=GOOD_MODEL, corrupt=True)
+    time.sleep(3)
     run_vigil("run")
     server.terminate()
     time.sleep(1)
@@ -99,9 +109,9 @@ def main():
 
     divider("DEMO COMPLETE")
     print("  Vigil detected real quality degradation from:", flush=True)
-    print("    1. Model swap (gemini-3.8-flash -> 1.5-flash)", flush=True)
-    print("    2. Corrupted knowledge base documents", flush=True)
-    print("  No tampering. No mocks. Real Gemini API. Real quality diff.\n", flush=True)
+    print(f"    1. Model swap ({GOOD_MODEL} -> {CHEAP_MODEL})", flush=True)
+    print(f"    2. Corrupted knowledge base documents", flush=True)
+    print("  No tampering. No mocks. Real API. Real quality diff.\n", flush=True)
 
 
 if __name__ == "__main__":

@@ -82,12 +82,38 @@ def _format_expectations(expect: dict) -> str:
     return "\n".join(lines)
 
 
-# ── Provider-specific judge calls ───────────────────────────────
+# ── LLM Judge Calls ─────────────────────────────────────────────
+#
+# Priority: OpenRouter > OpenAI > Gemini > rule-based
+# OpenRouter is preferred because one key gives access to ALL models
+# and uses the same OpenAI-compatible API.
 
-def _call_openai_judge(prompt: str, model: str) -> dict:
-    """Call OpenAI as LLM judge."""
+PROVIDERS = {
+    "openrouter": {
+        "env_key": "OPENROUTER_API_KEY",
+        "base_url": "https://openrouter.ai/api/v1",
+        "default_model": "openai/gpt-4o-mini",
+    },
+    "openai": {
+        "env_key": "OPENAI_API_KEY",
+        "base_url": None,  # uses default
+        "default_model": "gpt-4o-mini",
+    },
+    "gemini": {
+        "env_key": "GOOGLE_API_KEY",
+        "base_url": None,
+        "default_model": "gemini-3.8-flash",
+    },
+}
+
+
+def _call_openai_compatible(prompt: str, model: str, api_key: str, base_url: str | None = None) -> dict:
+    """Call any OpenAI-compatible API (OpenAI, OpenRouter, etc.)."""
     from openai import OpenAI
-    client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+    kwargs = {"api_key": api_key}
+    if base_url:
+        kwargs["base_url"] = base_url
+    client = OpenAI(**kwargs)
     resp = client.chat.completions.create(
         model=model,
         messages=[{"role": "user", "content": prompt}],
@@ -97,10 +123,10 @@ def _call_openai_judge(prompt: str, model: str) -> dict:
     return json.loads(resp.choices[0].message.content)
 
 
-def _call_gemini_judge(prompt: str, model: str) -> dict:
+def _call_gemini_judge(prompt: str, model: str, api_key: str) -> dict:
     """Call Gemini as LLM judge."""
     from google import genai as _genai
-    client = _genai.Client(api_key=os.environ["GOOGLE_API_KEY"])
+    client = _genai.Client(api_key=api_key)
     resp = client.models.generate_content(
         model=model,
         contents=prompt,
@@ -109,36 +135,28 @@ def _call_gemini_judge(prompt: str, model: str) -> dict:
     return json.loads(resp.text)
 
 
-def _detect_provider(model: str) -> str:
-    """Auto-detect which provider to use based on model name and available keys."""
-    openai_key = os.environ.get("OPENAI_API_KEY", "")
-    google_key = os.environ.get("GOOGLE_API_KEY", "")
-
-    # Explicit model name detection
-    if model.startswith("gpt-") or model.startswith("o1") or model.startswith("o3"):
-        if openai_key:
-            return "openai"
-    if model.startswith("gemini"):
-        if google_key:
-            return "gemini"
-
-    # Fallback: use whichever key is available (prefer OpenAI)
-    if openai_key:
-        return "openai"
-    if google_key:
-        return "gemini"
-    return "none"
+def _detect_provider(model: str) -> tuple[str, str]:
+    """Detect provider and resolve API key. Returns (provider_name, api_key) or ("none", "")."""
+    # Check each provider in priority order
+    for name in ["openrouter", "openai", "gemini"]:
+        key = os.environ.get(PROVIDERS[name]["env_key"], "")
+        if key:
+            return name, key
+    return "none", ""
 
 
-# Default models per provider
-DEFAULT_MODELS = {
-    "openai": "gpt-4o-mini",
-    "gemini": "gemini-3.8-flash",
-}
+def _resolve_model(model: str, provider: str) -> str:
+    """Pick the right model name. Empty model = use provider default."""
+    if model:
+        return model
+    return PROVIDERS[provider]["default_model"]
 
 
 def score_result(test_result: TestResult, model: str = "") -> ScoreResult:
-    """Score a test result using LLM-as-judge. Auto-detects OpenAI or Gemini."""
+    """Score a test result using LLM-as-judge.
+
+    Auto-detects provider: OpenRouter > OpenAI > Gemini > rule-based.
+    """
     if test_result.error:
         return ScoreResult(
             test_name=test_result.test.name,
@@ -148,13 +166,11 @@ def score_result(test_result: TestResult, model: str = "") -> ScoreResult:
             error=test_result.error,
         )
 
-    provider = _detect_provider(model)
+    provider, api_key = _detect_provider(model)
     if provider == "none":
         return _rule_based_score(test_result)
 
-    # Use default model if none specified or if model doesn't match provider
-    if not model or (provider == "openai" and model.startswith("gemini")) or (provider == "gemini" and model.startswith("gpt")):
-        model = DEFAULT_MODELS[provider]
+    model = _resolve_model(model, provider)
 
     prompt = JUDGE_PROMPT.format(
         query=test_result.test.query,
@@ -163,10 +179,12 @@ def score_result(test_result: TestResult, model: str = "") -> ScoreResult:
     )
 
     try:
-        if provider == "openai":
-            data = _call_openai_judge(prompt, model)
+        if provider == "gemini":
+            data = _call_gemini_judge(prompt, model, api_key)
         else:
-            data = _call_gemini_judge(prompt, model)
+            # OpenRouter and OpenAI both use OpenAI-compatible API
+            base_url = PROVIDERS[provider]["base_url"]
+            data = _call_openai_compatible(prompt, model, api_key, base_url)
 
         return ScoreResult(
             test_name=test_result.test.name,

@@ -1,19 +1,18 @@
-"""Tiny RAG app — a FastAPI server that answers questions using Gemini + context docs.
+"""Tiny RAG app — answers questions using an LLM + company docs.
 
-This simulates a real production AI endpoint. Vigil tests it from the outside.
+Supports OpenRouter (any model), OpenAI, or Gemini — auto-detects from env.
 
 Usage:
-    python demo/rag_app.py                              # Good model (gemini-3.8-flash)
-    python demo/rag_app.py --model gemini-flash-lite-latest     # Cheap model (quality drops)
-    python demo/rag_app.py --model gemini-3.8-flash --corrupt-context  # Corrupted docs
+    python demo/rag_app.py                                         # auto-detect provider
+    python demo/rag_app.py --model openai/gpt-4o-mini              # OpenRouter model
+    python demo/rag_app.py --model meta-llama/llama-3-8b-instruct  # free model (worse)
+    python demo/rag_app.py --corrupt-context                       # bad docs
 """
 
 import argparse
 import json
 import os
 from http.server import HTTPServer, BaseHTTPRequestHandler
-
-from google import genai
 
 # ── Company knowledge base (simulates retrieved docs) ───────────
 
@@ -55,32 +54,63 @@ Q: What do you sell? A: Various products and services.
 Q: How do I contact you? A: Visit our website.
 """
 
+SYSTEM_PROMPT = """You are Acme Corp's customer support assistant. Answer the user's question
+using ONLY the following company documentation. Be specific, include numbers and details.
+If the answer isn't in the docs, say "I don't have information about that."
+
+## Company Documentation
+{context}"""
+
+
+def _create_client(model: str):
+    """Create the right LLM client based on available keys."""
+    openrouter_key = os.environ.get("OPENROUTER_API_KEY", "")
+    openai_key = os.environ.get("OPENAI_API_KEY", "")
+    google_key = os.environ.get("GOOGLE_API_KEY", "")
+
+    if openrouter_key:
+        from openai import OpenAI
+        return "openrouter", OpenAI(api_key=openrouter_key, base_url="https://openrouter.ai/api/v1")
+    elif openai_key:
+        from openai import OpenAI
+        return "openai", OpenAI(api_key=openai_key)
+    elif google_key:
+        from google import genai
+        return "gemini", genai.Client(api_key=google_key)
+    else:
+        raise RuntimeError("Set OPENROUTER_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY")
+
 
 class RAGHandler(BaseHTTPRequestHandler):
-    model_name = "gemini-3.8-flash"
+    model_name = "openai/gpt-4o-mini"
     context = COMPANY_DOCS
+    provider = "openrouter"
+    client = None
 
     def do_POST(self):
         length = int(self.headers.get("Content-Length", 0))
         body = json.loads(self.rfile.read(length)) if length > 0 else {}
         query = body.get("message", "")
 
+        system = SYSTEM_PROMPT.format(context=self.context)
+
         try:
-            resp = self.__class__._client.models.generate_content(
-                model=self.model_name,
-                contents=f"""You are Acme Corp's customer support assistant. Answer the user's question
-using ONLY the following company documentation. Be specific, include numbers and details.
-If the answer isn't in the docs, say "I don't have information about that."
-
-## Company Documentation
-{self.context}
-
-## User Question
-{query}
-
-Answer:"""
-            )
-            answer = resp.text
+            if self.provider in ("openrouter", "openai"):
+                resp = self.__class__.client.chat.completions.create(
+                    model=self.model_name,
+                    messages=[
+                        {"role": "system", "content": system},
+                        {"role": "user", "content": query},
+                    ],
+                    temperature=0,
+                )
+                answer = resp.choices[0].message.content
+            else:  # gemini
+                resp = self.__class__.client.models.generate_content(
+                    model=self.model_name,
+                    contents=f"{system}\n\n## User Question\n{query}\n\nAnswer:",
+                )
+                answer = resp.text
         except Exception as e:
             answer = f"Sorry, I encountered an error: {e}"
 
@@ -93,22 +123,44 @@ Answer:"""
         print(f"  [{self.log_date_time_string()}] {args[0]}", flush=True)
 
 
+# Default models per provider
+DEFAULT_MODELS = {
+    "openrouter": "openai/gpt-4o-mini",
+    "openai": "gpt-4o-mini",
+    "gemini": "gemini-3.8-flash",
+}
+
+
 def main():
     parser = argparse.ArgumentParser(description="Demo RAG app for testing Vigil")
     parser.add_argument("--port", type=int, default=8500)
-    parser.add_argument("--model", default="gemini-3.8-flash",
-                        help="Gemini model to use (swap to cheaper model to simulate degradation)")
+    parser.add_argument("--model", default="",
+                        help="Model to use (e.g. openai/gpt-4o-mini, meta-llama/llama-3-8b-instruct)")
     parser.add_argument("--corrupt-context", action="store_true",
                         help="Use corrupted/outdated docs instead of real knowledge base")
     args = parser.parse_args()
 
-    RAGHandler._client = genai.Client(api_key=os.environ["GOOGLE_API_KEY"])
-    RAGHandler.model_name = args.model
+    # Load .env
+    from pathlib import Path
+    env_path = Path(__file__).parent.parent / ".env"
+    if env_path.exists():
+        for line in env_path.read_text().splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, _, v = line.partition("=")
+                if v.strip() and k.strip() not in os.environ:
+                    os.environ[k.strip()] = v.strip()
+
+    provider, client = _create_client(args.model)
+    RAGHandler.provider = provider
+    RAGHandler.client = client
+    RAGHandler.model_name = args.model or DEFAULT_MODELS[provider]
     RAGHandler.context = CORRUPTED_DOCS if args.corrupt_context else COMPANY_DOCS
 
     server = HTTPServer(("localhost", args.port), RAGHandler)
     print(f"\n  Acme Corp RAG App")
-    print(f"  Model:    {args.model}")
+    print(f"  Provider: {provider}")
+    print(f"  Model:    {RAGHandler.model_name}")
     print(f"  Context:  {'CORRUPTED' if args.corrupt_context else 'Full knowledge base'}")
     print(f"  Running:  http://localhost:{args.port}")
     print(f"  Press Ctrl+C to stop\n", flush=True)
