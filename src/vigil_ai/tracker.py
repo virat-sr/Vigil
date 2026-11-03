@@ -37,9 +37,15 @@ class Tracker:
             CREATE TABLE IF NOT EXISTS runs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 timestamp TEXT NOT NULL,
-                config_name TEXT DEFAULT ''
+                config_name TEXT DEFAULT '',
+                model TEXT DEFAULT ''
             )
         """)
+        # Migration: add model column if missing (existing DBs)
+        try:
+            self._conn.execute("SELECT model FROM runs LIMIT 1")
+        except sqlite3.OperationalError:
+            self._conn.execute("ALTER TABLE runs ADD COLUMN model TEXT DEFAULT ''")
         self._conn.execute("""
             CREATE TABLE IF NOT EXISTS scores (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -61,12 +67,12 @@ class Tracker:
         """)
         self._conn.commit()
 
-    def record_run(self, scores: list[ScoreResult], config_name: str = "") -> int:
+    def record_run(self, scores: list[ScoreResult], config_name: str = "", model: str = "") -> int:
         """Record a complete healthcheck run. Returns run_id."""
         now = datetime.now().isoformat()
         cursor = self._conn.execute(
-            "INSERT INTO runs (timestamp, config_name) VALUES (?, ?)",
-            (now, config_name),
+            "INSERT INTO runs (timestamp, config_name, model) VALUES (?, ?, ?)",
+            (now, config_name, model),
         )
         run_id = cursor.lastrowid
 

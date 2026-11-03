@@ -41,14 +41,23 @@ def _execute_run(config, tracker, webhook=None):
         status = "OK" if tr.success else "ERR"
         print(f"    [{status}] {tr.test.name} ({tr.latency_ms:.0f}ms)", flush=True)
 
-    print(f"\n  Scoring with {config.scorer_model or 'auto-detect'}...\n", flush=True)
+    # Detect which judge model is being used
+    from .scorer import _detect_provider, PROVIDERS
+    provider, _ = _detect_provider(config.scorer_model)
+    if config.scorer_model:
+        judge_model = config.scorer_model
+    elif provider != "none":
+        judge_model = PROVIDERS[provider]["default_model"]
+    else:
+        judge_model = "rule-based (no API key)"
+
+    print(f"\n  Scoring with {judge_model}...\n", flush=True)
     scores = score_all(test_results, model=config.scorer_model)
-    # Show reasoning for low scores (helps debug scoring issues)
     for s in scores:
         if s.score < 0.5:
             print(f"    [{s.test_name}] score={s.score:.2f}: {s.reasoning[:120]}", flush=True)
 
-    run_id = tracker.record_run(scores, config.name)
+    run_id = tracker.record_run(scores, config.name, model=judge_model)
     baselines = tracker.get_all_baselines()
 
     if not baselines:
@@ -127,12 +136,16 @@ def cmd_baseline(args):
     config = load_config(args.config)
     tracker = Tracker(args.db)
 
+    from .scorer import _detect_provider, PROVIDERS
+    provider, _ = _detect_provider(config.scorer_model)
+    judge_model = config.scorer_model or (PROVIDERS[provider]["default_model"] if provider != "none" else "rule-based")
+
     print(f"\n  Running baseline tests against {config.endpoint}...\n", flush=True)
 
     test_results = run_all(config)
     scores = score_all(test_results, model=config.scorer_model)
     tracker.set_baseline(scores)
-    tracker.record_run(scores, config.name)
+    tracker.record_run(scores, config.name, model=judge_model)
 
     print("  Baseline set:\n", flush=True)
     for s in scores:

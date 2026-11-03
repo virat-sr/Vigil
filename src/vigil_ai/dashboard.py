@@ -25,7 +25,7 @@ def _query_db(db_path: str, sql: str, params: tuple = ()) -> list[dict]:
 
 def _get_dashboard_data(db_path: str) -> dict:
     """Pull all data needed for the dashboard."""
-    runs = _query_db(db_path, "SELECT id, timestamp, config_name FROM runs ORDER BY id")
+    runs = _query_db(db_path, "SELECT id, timestamp, config_name, COALESCE(model,'') as model FROM runs ORDER BY id")
     scores = _query_db(db_path, """
         SELECT s.run_id, s.test_name, s.score, s.reasoning, s.latency_ms, s.error, r.timestamp
         FROM scores s JOIN runs r ON s.run_id = r.id
@@ -53,7 +53,7 @@ def _get_dashboard_data(db_path: str) -> dict:
         run_summaries.append({
             "id": run["id"], "timestamp": run["timestamp"],
             "avg_score": round(avg, 3), "passed": passed, "failed": failed,
-            "total": len(run_scores),
+            "total": len(run_scores), "model": run.get("model", ""),
         })
 
     baseline_map = {b["test_name"]: b["score"] for b in baselines}
@@ -273,7 +273,8 @@ function selectRun(runId) {
   if (!details.length) return;
 
   selectedRunId = runId;
-  const label = 'Run #' + runId + ' (' + (run ? run.timestamp.slice(0,16) : '') + ') — avg ' + (run ? run.avg_score.toFixed(2) : '');
+  const modelStr = run && run.model ? ' | ' + run.model : '';
+  const label = 'Run #' + runId + ' (' + (run ? run.timestamp.slice(0,16) : '') + ')' + modelStr + ' — avg ' + (run ? run.avg_score.toFixed(2) : '');
   renderTable(details, label);
 
   // Highlight selected pill
@@ -286,7 +287,11 @@ function selectRun(runId) {
 const colors = ['#60a5fa','#f472b6','#34d399','#fbbf24','#a78bfa','#fb923c','#22d3ee','#e879f9','#4ade80','#f87171'];
 const datasets = DATA.test_names.map((name, i) => ({
   label: name,
-  data: (DATA.series[name]||[]).map(p => ({x: 'Run #' + p.run_id, y: p.score})),
+  data: (DATA.series[name]||[]).map(p => {
+    const run = DATA.runs.find(r => r.id === p.run_id);
+    const m = run && run.model ? ' (' + run.model.split('/').pop() + ')' : '';
+    return {x: 'Run #' + p.run_id + m, y: p.score};
+  }),
   borderColor: colors[i % colors.length],
   backgroundColor: colors[i % colors.length] + '20',
   tension: 0.3, fill: false, pointRadius: 5, pointHoverRadius: 8, borderWidth: 2,
@@ -295,7 +300,7 @@ const datasets = DATA.test_names.map((name, i) => ({
 // Baseline dashed line
 if (Object.keys(DATA.baselines).length) {
   const blAvg = Object.values(DATA.baselines).reduce((a,b) => a+b, 0) / Object.values(DATA.baselines).length;
-  const labels = datasets[0] ? datasets[0].data.map(d => d.x) : [];
+  const labels = (datasets[0] && datasets[0].data) ? datasets[0].data.map(d => d.x) : [];
   datasets.push({
     label: 'Baseline',
     data: labels.map(x => ({x, y: blAvg})),
@@ -357,8 +362,9 @@ function updateDistChart(tests) {
 const pills = document.getElementById('run-pills');
 DATA.runs.forEach(r => {
   const cls = r.avg_score >= 0.8 ? 'good' : r.avg_score >= 0.5 ? 'warn' : 'bad';
+  const modelTag = r.model ? ' [' + r.model.split('/').pop() + ']' : '';
   pills.innerHTML += '<div class="run-pill ' + cls + '" id="pill-' + r.id + '" onclick="selectRun(' + r.id + ')">' +
-    'Run #' + r.id + ' — ' + r.avg_score.toFixed(2) + ' (' + r.timestamp.slice(5,16) + ')</div>';
+    'Run #' + r.id + ' — ' + r.avg_score.toFixed(2) + modelTag + ' (' + r.timestamp.slice(5,16) + ')</div>';
 });
 
 // ── Initial render (latest run) ────────────────────────────────
