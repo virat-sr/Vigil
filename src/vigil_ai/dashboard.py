@@ -58,15 +58,18 @@ def _get_dashboard_data(db_path: str) -> dict:
 
     baseline_map = {b["test_name"]: b["score"] for b in baselines}
 
-    # Latest run details
-    latest = []
-    if runs:
-        latest_id = runs[-1]["id"]
+    # Per-run details (all runs, not just latest) — for clickable dashboard
+    run_details = {}
+    for run in runs:
+        details = []
         for s in scores:
-            if s["run_id"] == latest_id:
+            if s["run_id"] == run["id"]:
                 bl = baseline_map.get(s["test_name"])
                 drift_pct = round(((s["score"] - bl) / bl) * 100, 1) if bl and bl > 0 else None
-                latest.append({**s, "baseline": bl, "drift_pct": drift_pct})
+                details.append({**s, "baseline": bl, "drift_pct": drift_pct})
+        run_details[run["id"]] = details
+
+    latest = run_details.get(runs[-1]["id"], []) if runs else []
 
     return {
         "test_names": test_names,
@@ -74,6 +77,7 @@ def _get_dashboard_data(db_path: str) -> dict:
         "runs": run_summaries,
         "baselines": baseline_map,
         "latest": latest,
+        "run_details": run_details,
         "total_runs": len(runs),
     }
 
@@ -138,12 +142,17 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   /* Run History */
   .run-pills { display: flex; gap: 8px; flex-wrap: wrap; }
   .run-pill { padding: 6px 14px; border-radius: 8px; font-size: 13px; border: 1px solid #1e293b; background: #1e293b; }
+  .run-pill { cursor: pointer; transition: transform 0.1s, box-shadow 0.2s; }
+  .run-pill:hover { transform: scale(1.05); }
   .run-pill.good { border-color: #10b981; color: #34d399; }
   .run-pill.warn { border-color: #f59e0b; color: #fbbf24; }
   .run-pill.bad { border-color: #ef4444; color: #f87171; }
+  .run-pill.selected { box-shadow: 0 0 0 2px #60a5fa; transform: scale(1.08); }
 
   .reasoning { font-size: 12px; color: #64748b; max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .reasoning:hover { white-space: normal; }
+
+  .table-header-run { font-size: 13px; color: #60a5fa; margin-bottom: 12px; }
 
   .footer { text-align: center; padding: 24px; color: #475569; font-size: 12px; }
 </style>
@@ -179,7 +188,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     </div>
 
     <div class="card card-full">
-      <h2>Latest Run — Test Results</h2>
+      <h2>Test Results — <span id="selected-run-label" class="table-header-run">Latest Run</span></h2>
       <table class="results-table">
         <thead><tr><th>Test</th><th>Score</th><th></th><th>Baseline</th><th>Drift</th><th>Status</th><th>Reasoning</th></tr></thead>
         <tbody id="results-body"></tbody>
@@ -202,8 +211,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
 <script>
 const DATA = __DATA_PLACEHOLDER__;
+const RUN_DETAILS = DATA.run_details || {};
 
-// Health banner
+// ── Health banner (latest run) ─────────────────────────────────
 const latest = DATA.latest || [];
 const avgScore = latest.length ? (latest.reduce((s,t) => s + t.score, 0) / latest.length) : 0;
 const passed = latest.filter(t => t.score >= 0.7).length;
@@ -225,63 +235,99 @@ if (DATA.runs.length) {
   document.getElementById('last-update').textContent = DATA.runs[DATA.runs.length-1].timestamp.slice(0,19);
 }
 
-// Time series chart
+// ── Render test results table for any run ──────────────────────
+function renderTable(tests, runLabel) {
+  const tbody = document.getElementById('results-body');
+  tbody.innerHTML = '';
+  document.getElementById('selected-run-label').textContent = runLabel;
+
+  tests.forEach(t => {
+    const badge = t.score >= 0.7 ? 'badge-pass' : t.score >= 0.4 ? 'badge-warn' : 'badge-fail';
+    const status = t.score >= 0.7 ? 'PASS' : t.score >= 0.4 ? 'WARN' : 'FAIL';
+    const driftClass = t.drift_pct > 0 ? 'drift-pos' : t.drift_pct < -15 ? 'drift-neg' : 'drift-neutral';
+    const driftText = t.drift_pct !== null ? (t.drift_pct > 0 ? '+' : '') + t.drift_pct + '%' : '  ';
+    const barW = Math.max(t.score * 100, 2);
+    const barColor = t.score >= 0.7 ? '#10b981' : t.score >= 0.4 ? '#f59e0b' : '#ef4444';
+
+    tbody.innerHTML += '<tr>' +
+      '<td><strong>' + t.test_name + '</strong></td>' +
+      '<td>' + t.score.toFixed(2) + '</td>' +
+      '<td><span class="score-bar-bg"><span class="score-bar" style="width:' + barW + '%;background:' + barColor + '"></span></span></td>' +
+      '<td>' + (t.baseline !== null && t.baseline !== undefined ? t.baseline.toFixed(2) : '  ') + '</td>' +
+      '<td class="' + driftClass + '">' + driftText + '</td>' +
+      '<td><span class="badge ' + badge + '">' + status + '</span></td>' +
+      '<td class="reasoning">' + (t.reasoning||'') + '</td>' +
+      '</tr>';
+  });
+
+  // Update distribution chart
+  updateDistChart(tests);
+}
+
+// ── Select a run (called by chart click and pill click) ────────
+let selectedRunId = null;
+
+function selectRun(runId) {
+  const run = DATA.runs.find(r => r.id === runId);
+  const details = RUN_DETAILS[runId] || [];
+  if (!details.length) return;
+
+  selectedRunId = runId;
+  const label = 'Run #' + runId + ' (' + (run ? run.timestamp.slice(0,16) : '') + ') — avg ' + (run ? run.avg_score.toFixed(2) : '');
+  renderTable(details, label);
+
+  // Highlight selected pill
+  document.querySelectorAll('.run-pill').forEach(p => p.classList.remove('selected'));
+  const pill = document.getElementById('pill-' + runId);
+  if (pill) pill.classList.add('selected');
+}
+
+// ── Time series chart ──────────────────────────────────────────
 const colors = ['#60a5fa','#f472b6','#34d399','#fbbf24','#a78bfa','#fb923c','#22d3ee','#e879f9','#4ade80','#f87171'];
 const datasets = DATA.test_names.map((name, i) => ({
   label: name,
-  data: (DATA.series[name]||[]).map(p => ({x: p.timestamp.slice(0,19), y: p.score})),
+  data: (DATA.series[name]||[]).map(p => ({x: 'Run #' + p.run_id, y: p.score})),
   borderColor: colors[i % colors.length],
   backgroundColor: colors[i % colors.length] + '20',
-  tension: 0.3, fill: false, pointRadius: 4, pointHoverRadius: 6, borderWidth: 2,
+  tension: 0.3, fill: false, pointRadius: 5, pointHoverRadius: 8, borderWidth: 2,
 }));
 
-// Add baseline as dashed line
+// Baseline dashed line
 if (Object.keys(DATA.baselines).length) {
   const blAvg = Object.values(DATA.baselines).reduce((a,b) => a+b, 0) / Object.values(DATA.baselines).length;
   const labels = datasets[0] ? datasets[0].data.map(d => d.x) : [];
   datasets.push({
-    label: 'Baseline Avg',
+    label: 'Baseline',
     data: labels.map(x => ({x, y: blAvg})),
     borderColor: '#475569', borderDash: [6,4], borderWidth: 2, pointRadius: 0, fill: false,
   });
 }
 
-new Chart(document.getElementById('timeChart'), {
+const timeChart = new Chart(document.getElementById('timeChart'), {
   type: 'line',
   data: { datasets },
   options: {
     responsive: true, maintainAspectRatio: false,
     scales: {
-      x: { type: 'category', grid: {color:'#1e293b'}, ticks: {color:'#64748b', maxTicksLimit: 10} },
+      x: { type: 'category', grid: {color:'#1e293b'}, ticks: {color:'#64748b'} },
       y: { min: 0, max: 1.05, grid: {color:'#1e293b'}, ticks: {color:'#64748b'} },
     },
-    plugins: { legend: { labels: {color:'#94a3b8', usePointStyle: true, pointStyle: 'circle'} } },
+    plugins: {
+      legend: { labels: {color:'#94a3b8', usePointStyle: true, pointStyle: 'circle'} },
+      tooltip: { callbacks: { title: (items) => items[0] ? items[0].raw.x : '' } },
+    },
+    onClick: (evt, elements) => {
+      if (elements.length > 0) {
+        const idx = elements[0].index;
+        const runId = DATA.runs[idx] ? DATA.runs[idx].id : null;
+        if (runId) selectRun(runId);
+      }
+    },
   },
 });
 
-// Results table
-const tbody = document.getElementById('results-body');
-latest.forEach(t => {
-  const badge = t.score >= 0.7 ? 'badge-pass' : t.score >= 0.4 ? 'badge-warn' : 'badge-fail';
-  const status = t.score >= 0.7 ? 'PASS' : t.score >= 0.4 ? 'WARN' : 'FAIL';
-  const driftClass = t.drift_pct > 0 ? 'drift-pos' : t.drift_pct < -15 ? 'drift-neg' : 'drift-neutral';
-  const driftText = t.drift_pct !== null ? (t.drift_pct > 0 ? '+' : '') + t.drift_pct + '%' : '—';
-  const barW = Math.max(t.score * 100, 2);
-  const barColor = t.score >= 0.7 ? '#10b981' : t.score >= 0.4 ? '#f59e0b' : '#ef4444';
-
-  tbody.innerHTML += '<tr>' +
-    '<td><strong>' + t.test_name + '</strong></td>' +
-    '<td>' + t.score.toFixed(2) + '</td>' +
-    '<td><span class="score-bar-bg"><span class="score-bar" style="width:' + barW + '%;background:' + barColor + '"></span></span></td>' +
-    '<td>' + (t.baseline !== null ? t.baseline.toFixed(2) : '—') + '</td>' +
-    '<td class="' + driftClass + '">' + driftText + '</td>' +
-    '<td><span class="badge ' + badge + '">' + status + '</span></td>' +
-    '<td class="reasoning">' + (t.reasoning||'') + '</td>' +
-    '</tr>';
-});
-
-// Distribution chart
-new Chart(document.getElementById('distChart'), {
+// ── Distribution chart (updates when run is selected) ──────────
+let distChart = new Chart(document.getElementById('distChart'), {
   type: 'bar',
   data: {
     labels: latest.map(t => t.test_name),
@@ -294,17 +340,33 @@ new Chart(document.getElementById('distChart'), {
   },
   options: {
     responsive: true, maintainAspectRatio: false, indexAxis: 'y',
-    scales: { x: {min:0,max:1,grid:{color:'#1e293b'},ticks:{color:'#64748b'}}, y: {grid:{display:false},ticks:{color:'#94a3b8'}} },
+    scales: { x: {min:0,max:1,grid:{color:'#1e293b'},ticks:{color:'#64748b'}}, y: {grid:{display:false},ticks:{color:'#94a3b8',font:{size:11}}} },
     plugins: { legend: {display: false} },
   },
 });
 
-// Run history pills
+function updateDistChart(tests) {
+  distChart.data.labels = tests.map(t => t.test_name);
+  distChart.data.datasets[0].data = tests.map(t => t.score);
+  distChart.data.datasets[0].backgroundColor = tests.map(t => t.score >= 0.7 ? '#10b98180' : t.score >= 0.4 ? '#f59e0b80' : '#ef444480');
+  distChart.data.datasets[0].borderColor = tests.map(t => t.score >= 0.7 ? '#10b981' : t.score >= 0.4 ? '#f59e0b' : '#ef4444');
+  distChart.update();
+}
+
+// ── Run history pills (clickable) ──────────────────────────────
 const pills = document.getElementById('run-pills');
 DATA.runs.forEach(r => {
   const cls = r.avg_score >= 0.8 ? 'good' : r.avg_score >= 0.5 ? 'warn' : 'bad';
-  pills.innerHTML += '<div class="run-pill ' + cls + '">Run #' + r.id + ' — ' + r.avg_score.toFixed(2) + ' (' + r.timestamp.slice(5,16) + ')</div>';
+  pills.innerHTML += '<div class="run-pill ' + cls + '" id="pill-' + r.id + '" onclick="selectRun(' + r.id + ')">' +
+    'Run #' + r.id + ' — ' + r.avg_score.toFixed(2) + ' (' + r.timestamp.slice(5,16) + ')</div>';
 });
+
+// ── Initial render (latest run) ────────────────────────────────
+renderTable(latest, 'Latest Run (#' + (DATA.runs.length ? DATA.runs[DATA.runs.length-1].id : '') + ')');
+if (DATA.runs.length) {
+  const lastPill = document.getElementById('pill-' + DATA.runs[DATA.runs.length-1].id);
+  if (lastPill) lastPill.classList.add('selected');
+}
 </script>
 </body>
 </html>"""
