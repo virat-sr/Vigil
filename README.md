@@ -1,50 +1,49 @@
 # vigil 🔭
 
-**Uptime monitoring for AI quality.** Proactive testing, drift detection, alerting.
+**Scheduled quality monitor for AI systems where data changes without deploys.**
 
-Your AI endpoint is live. But is it still *good*? Vigil sends test queries on a schedule, scores the responses, tracks quality over time, and alerts when it degrades — before your users notice.
-
-```
-Today:                                    With Vigil:
-──────                                    ──────────
-Deploy RAG app                            Deploy + add test queries
-Quality degrades over 3 weeks             Quality drop detected in hours
-Nobody notices until users complain       Alert: "RAG quality ↓19%"
-No idea when it broke or why              History: broke after Oct 15 deploy
-```
+Your CI evals pass on every deploy. But your AI's quality depends on more than code — it depends on **data that changes without anyone deploying anything.** Vigil catches what CI can't: quality degradation caused by data changes, not code changes.
 
 ---
 
-## Table of Contents
+## The Problem CI Evals Can't Solve
 
-- [Why This Exists](#why-this-exists)
-- [Quick Start](#quick-start)
-- [How It Works](#how-it-works)
-- [Configuration Reference](#configuration-reference)
-- [CLI Reference](#cli-reference)
-- [Scoring](#scoring)
-- [Use on Any Repo / Endpoint](#use-on-any-repo--endpoint)
-- [Demo: Catching Real Degradation](#demo-catching-real-degradation)
-- [MCP Integration](#mcp-integration)
-- [CI/CD Integration](#cicd-integration)
-- [Architecture](#architecture)
-- [License](#license)
+CI evals are triggered by **code changes**. But most AI quality issues come from **data changes**:
 
----
+```
+Monday:    Deploy. CI evals pass.                    ✅
+Tuesday:   Content team updates 200 FAQ articles.    (no deploy)
+Wednesday: Nightly RAG reindex runs.                 (no deploy)
+Thursday:  User: "Your bot gave me wrong pricing."   ❌
+Friday:    Team discovers the FAQ edit broke pricing answers 3 days ago.
+```
 
-## Why This Exists
+**CI never ran. Nobody deployed. But quality broke.**
 
-Every AI observability tool traces your **production traffic** — they tell you what happened *after* it happened. None of them **proactively test** your AI.
+### Real scenarios CI evals will never catch:
 
-| Tool | What it does | What it doesn't do |
+| What changed | Why it broke AI quality | Was there a deploy? |
 |---|---|---|
-| **Langfuse** (37K⭐) | Traces LLM calls | Doesn't proactively test quality |
-| **Datadog LLM Obs** | Monitors latency/errors | Doesn't score response quality |
-| **RAGAS** (10K⭐) | One-shot batch eval | [Crashes on faithfulness](https://github.com/explodinggradients/ragas/issues/1150). No scheduling |
-| **Promptfoo** (26K⭐) | Pre-deploy prompt testing | No production monitoring |
-| **Vigil** | **Sends test queries on schedule, scores responses, detects drift, alerts** | — |
+| Content team edited the refund policy doc | RAG now retrieves outdated chunks about refunds | **No** |
+| Nightly reindex job embedded 500 new docs with bad formatting | Retrieval quality dropped — garbled chunks ranked higher | **No** |
+| Product team updated pricing in the database | AI still serves old pricing from stale embeddings | **No** |
+| Embedding model got deprecated, pipeline silently falls back | New embeddings are incompatible with old ones in the index | **No** |
+| Vector DB rebalanced after growing 10x | Similarity scores shifted, different chunks returned for same queries | **No** |
+| Third-party data feed changed format | AI's grounding data is now garbage | **No** |
+| Support team deleted a "redundant" article | That article was the only source for a common question | **No** |
+| Peak traffic — self-hosted model batches aggressively | Response quality drops under load, recovers at night | **No** |
 
-Vigil is the missing piece: a guard that actively checks if your AI is still healthy.
+**None of these trigger CI. All of them degrade quality. Users notice. Your team doesn't — until it's too late.**
+
+### The gap
+
+```
+CODE changes  ──triggers──→  CI evals  ──→  catches code bugs        ✅
+DATA changes  ──triggers──→  nothing   ──→  silent degradation       ❌
+TIME passes   ──triggers──→  vigil     ──→  catches data-driven bugs ✅
+```
+
+**Vigil runs on a schedule, not on deploys.** It tests your live production endpoint — with the real data, real index, real load — and alerts when quality drops.
 
 ---
 
@@ -53,443 +52,286 @@ Vigil is the missing piece: a guard that actively checks if your AI is still hea
 ### 1. Install
 
 ```bash
-pip install vigil-ai
-
-# Install LLM provider for scoring (pick one):
-pip install openai          # for OpenRouter or OpenAI
-pip install google-genai    # for Gemini
+pip install vigil-ai openai    # openai SDK needed for OpenRouter/OpenAI scoring
 ```
 
 ### 2. Set API key
 
-Create a `.env` file in your project root (or export as env var):
-
 ```bash
-# .env — pick ONE provider for the LLM judge
-# OpenRouter (recommended — one key, all models):
-OPENROUTER_API_KEY=sk-or-v1-your-key-here
-
-# OR OpenAI directly:
-# OPENAI_API_KEY=sk-your-key-here
-
-# OR Google Gemini:
-# GOOGLE_API_KEY=your-key-here
+# .env (gitignored — never committed)
+OPENROUTER_API_KEY=sk-or-v1-your-key    # get free at openrouter.ai/keys
 ```
-
-Vigil auto-detects which key is available. Priority: OpenRouter > OpenAI > Gemini > rule-based (no key).
 
 ### 3. Create config
 
 ```bash
-vigil init
+vigil init    # creates vigil.yaml
 ```
 
-This creates `vigil.yaml`. Edit it to point to your AI endpoint and add test queries:
+Edit `vigil.yaml` — point to your production endpoint, add queries your real users ask:
 
 ```yaml
-name: "My AI App"
-endpoint: "http://localhost:8000/api/chat"
+name: "Customer Support RAG"
+endpoint: "https://my-app.com/api/chat"
 response_field: "response"
-scorer_model: ""  # auto-detect from API key
+alert_threshold: 0.15
 
 tests:
-  - name: "basic_test"
-    query: "What is your return policy?"
+  - name: "refund_policy"
+    query: "What is your refund policy?"
     expect:
-      contains: ["30 days", "refund"]
+      contains: ["30 days", "full refund"]
+
+  - name: "pricing"
+    query: "How much does the Pro plan cost?"
+    expect:
+      contains: ["49"]
+      contains_numbers: true
+
+  - name: "hours"
+    query: "When are you open?"
+    expect:
+      contains: ["Monday", "Friday"]
 ```
 
-### 4. Set baseline (first time)
+### 4. Set baseline + start monitoring
 
 ```bash
-vigil baseline
+vigil baseline                # set quality reference point
+vigil watch --every 360       # check every 6 hours, forever
 ```
 
-This runs all tests and saves the scores as your quality reference point.
-
-### 5. Run quality checks
-
-```bash
-vigil run
+When quality drops:
 ```
-
-Output:
-```
-  vigil — 2026-11-03 11:43
-  Config: My AI App
-
-    OK  return_policy             1.00  (baseline: 1.00)  +0%
-    OK  pricing_details           1.00  (baseline: 1.00)  +0%
-    !!  enterprise_vs_pro         0.00  (baseline: 1.00)  -100% DEGRADED
-
-  Overall: 2/3 pass, 1 degraded
-  Average score: 0.67 (baseline: 1.00) -33.3%
+  !! refund_policy    0.40  (baseline: 1.00)  -60% DEGRADED
+  !! pricing          0.00  (baseline: 1.00)  -100% DEGRADED
 
   !!! QUALITY ALERTS !!!
-  !! enterprise_vs_pro: score dropped 100.0% (1.00 -> 0.00)
+  !! refund_policy: score dropped 60.0% (1.00 -> 0.40)
+  !! pricing: score dropped 100.0% (1.00 -> 0.00)
 ```
 
-### 6. Continuous monitoring
+You investigate → find out the content team edited the pricing page yesterday. Fix the doc. Quality recovers. **Users never noticed.**
 
-```bash
-vigil watch --every 30          # check every 30 minutes
-vigil watch --every 360         # every 6 hours
+---
+
+## Real-World Examples
+
+### Example 1: Content Team Edits Break RAG
+
+**Company:** E-commerce with AI customer support chatbot.
+
+```
+Before:  Knowledge base article says "Returns within 30 days for full refund."
+         Vigil baseline: refund_policy = 1.00 ✅
+
+Content team edits:  Replaces article with "See our returns page for details."
+         (No code deployed. No CI triggered.)
+
+Next vigil run:  refund_policy = 0.20 ❌
+         Alert: "refund_policy dropped 80% from baseline"
+
+Action:  Team reverts the article. Quality restored in minutes.
+Without vigil:  Users get vague refund answers for days until someone complains.
 ```
 
-Runs until you `Ctrl+C`. Each cycle: test → score → drift check → alert.
+### Example 2: Nightly Reindex Corrupts Chunks
+
+**Company:** SaaS with internal docs RAG for engineers.
+
+```
+Before:  RAG index has 10K clean document chunks.
+         Vigil baseline: all 8 tests pass, avg 0.95 ✅
+
+Nightly reindex:  New ETL pipeline introduces HTML tags in chunks.
+         Chunks now contain "<div class='content'>The API supports..." 
+         Retrieval quality drops — garbled chunks rank higher.
+         (No code deployed. No CI triggered.)
+
+Next vigil run:  avg score 0.45 ❌
+         Alert on 6/8 tests degraded
+
+Action:  Team finds the ETL bug, fixes it, re-indexes.
+Without vigil:  Engineers get bad answers for a week. File tickets. Blame the AI.
+```
+
+### Example 3: Stale Embeddings After Pricing Change
+
+**Company:** B2B SaaS. AI answers pricing questions.
+
+```
+Before:  Pro plan is $49/month. Embedded in vector DB.
+         Vigil test: "How much is Pro?" → expects "49" → score 1.00 ✅
+
+Product team changes pricing:  Pro is now $59/month. Updated on website.
+         But nobody re-embedded the pricing docs.
+         RAG still retrieves the old "$49" chunk.
+         (No code deployed. No CI triggered.)
+
+Next vigil run:  pricing test still passes (old embedding says $49) ✅
+         BUT: You update your vigil.yaml to expect "59" after the pricing change.
+         Next run: pricing = 0.00 ❌ — "49" found instead of "59"
+         Alert: pricing dropped 100%
+
+Action:  Team re-embeds pricing docs. Index updated.
+Without vigil:  AI quotes wrong price to customers for weeks. Revenue impact.
+```
+
+### Example 4: Peak Load Degrades Self-Hosted Model
+
+**Company:** Healthcare AI running local model for privacy.
+
+```
+Before:  Off-peak: model serves detailed, accurate answers.
+         Vigil baseline (set at 3 AM): avg 0.92 ✅
+
+9 AM peak traffic:  Model batches aggressively to handle load.
+         Responses get shorter, less detailed, miss key info.
+         (No deploy. Load-dependent degradation.)
+
+Vigil run at 10 AM:  avg 0.61 ❌
+         Alert on 4/6 tests degraded
+
+Action:  Team scales up GPU instances during peak hours.
+Without vigil:  Doctors get incomplete answers during the busiest hours. Patient safety risk.
+```
 
 ---
 
 ## How It Works
 
 ```
-┌─────────────┐     ┌──────────────┐     ┌──────────────┐     ┌──────────┐
-│ vigil.yaml   │────>│ Runner       │────>│ Scorer       │────>│ Tracker  │
-│ (test suite) │     │ (HTTP calls  │     │ (LLM judge   │     │ (SQLite  │
-│              │     │  to your app)│     │  scores 0-1) │     │  history)│
-└─────────────┘     └──────────────┘     └──────────────┘     └──────────┘
-                                                                    │
-                                                              ┌─────▼──────┐
-                                                              │ Alerter    │
-                                                              │ (console + │
-                                                              │  webhook)  │
-                                                              └────────────┘
+vigil.yaml          →  Runner            →  Scorer           →  Tracker
+(your test queries)    (HTTP calls to       (LLM-as-judge       (SQLite: history,
+                        production)          scores 0.0-1.0)     baselines, drift)
+                                                                      │
+                                                                 Alerter
+                                                                 (console + Slack)
 ```
 
-1. **Define** test queries + expectations in `vigil.yaml`
-2. **Run** → Vigil sends each query to your AI endpoint via HTTP
-3. **Score** → LLM-as-judge evaluates each response (0.0–1.0)
-4. **Track** → Scores saved in SQLite, compared against baseline
-5. **Alert** → If quality drops beyond threshold, alerts fire
-
----
-
-## Configuration Reference
-
-### `vigil.yaml`
-
-```yaml
-# Required
-endpoint: "http://localhost:8000/api/chat"    # your AI endpoint
-
-# Optional (with defaults)
-name: "My App"                 # display name in reports
-response_field: "response"     # JSON field containing the AI's answer
-alert_threshold: 0.15          # alert if quality drops >15% from baseline
-scorer_model: ""               # "" = auto-detect. Or: "gpt-4o-mini", "openai/gpt-4o-mini"
-timeout: 30                    # seconds per HTTP request
-
-# Test cases
-tests:
-  - name: "test_name"          # unique identifier
-    query: "Your question"     # sent to the endpoint
-    expect:                    # expectations for scoring
-      contains: ["keyword1", "keyword2"]   # response must include these
-      min_length: 100                       # minimum character count
-      contains_numbers: true                # must include numbers
-      no_hallucination: true                # no made-up information
-      tone: "professional"                  # expected tone
-      grounded_in_context: true             # answers must be supported
-      language: "en"                        # expected language
-```
-
-### Custom request format
-
-By default, vigil sends `{"message": "your query"}`. Override with `body_template`:
-
-```yaml
-tests:
-  - name: "custom_format"
-    query: "Hello"
-    body_template: '{"messages": [{"role": "user", "content": "{{query}}"}]}'
-    headers:
-      Authorization: "Bearer your-token"
-    method: "POST"
-```
+1. **Define** 5-10 queries your real users ask, with expected keywords/facts
+2. **Baseline** → vigil runs them, saves scores as reference
+3. **Watch** → vigil re-runs every N hours, compares to baseline
+4. **Alert** → if any test drops beyond threshold, you get notified
 
 ---
 
 ## CLI Reference
 
-| Command | What it does |
-|---|---|
-| `vigil init` | Create a sample `vigil.yaml` in the current directory |
-| `vigil run` | Run all tests, score, detect drift, report |
-| `vigil watch --every N` | Run tests every N minutes continuously |
-| `vigil baseline` | Run tests and set scores as the reference point |
-| `vigil history` | Show summary of all runs |
-| `vigil history --test NAME` | Show score trend for a specific test |
+```bash
+vigil init                         # create vigil.yaml template
+vigil baseline                     # run tests, set as quality reference
+vigil run                          # one-shot quality check
+vigil watch --every 360            # check every 6 hours continuously
+vigil history                      # show all runs summary
+vigil history --test pricing       # show one test's trend
+vigil dashboard                    # open visual dashboard in browser
+```
 
-### Common flags
+### Flags
 
 ```bash
-vigil run -c path/to/vigil.yaml      # custom config path
-vigil run --db path/to/history.db    # custom database path
-vigil run --webhook https://hooks.slack.com/xxx   # Slack/Discord alerts
+vigil run -c path/to/vigil.yaml         # custom config
+vigil run --db path/to/history.db        # custom database
+vigil run --webhook https://hooks.slack.com/xxx  # Slack alerts
+vigil dashboard --port 9090              # dashboard port
+```
+
+---
+
+## Configuration (`vigil.yaml`)
+
+```yaml
+# Required
+endpoint: "https://my-app.com/api/chat"
+
+# Optional
+name: "My App"
+response_field: "response"     # JSON field with the AI's answer
+alert_threshold: 0.15          # alert if >15% drop from baseline
+scorer_model: ""               # "" = auto-detect from API key
+timeout: 30                    # seconds per request
+
+tests:
+  - name: "test_name"
+    query: "A real user question"
+    expect:
+      contains: ["expected", "keywords"]    # must include these
+      min_length: 100                        # minimum response length
+      contains_numbers: true                 # must include numbers
+      no_hallucination: true                 # no made-up info
+      tone: "professional"                   # expected tone
+```
+
+### Custom request format
+
+```yaml
+tests:
+  - name: "custom"
+    query: "Hello"
+    body_template: '{"messages": [{"role": "user", "content": "{{query}}"}]}'
+    headers:
+      Authorization: "Bearer token"
 ```
 
 ---
 
 ## Scoring
 
-### LLM-as-Judge (with API key)
+### With API key (LLM-as-judge)
 
-Vigil uses an LLM to evaluate each response against your expectations. The judge returns a score from 0.0 to 1.0 with reasoning.
+| Provider | Env var | Default model | Monthly cost (~4 runs/day, 6 tests) |
+|---|---|---|---|
+| **OpenRouter** | `OPENROUTER_API_KEY` | `openai/gpt-4o-mini` | ~$0.90 |
+| **OpenAI** | `OPENAI_API_KEY` | `gpt-4o-mini` | ~$0.90 |
+| **Gemini** | `GOOGLE_API_KEY` | `gemini-3.8-flash` | ~$0.50 |
 
-| Provider | Set this env var | Default model |
-|---|---|---|
-| **OpenRouter** (recommended) | `OPENROUTER_API_KEY` | `openai/gpt-4o-mini` |
-| **OpenAI** | `OPENAI_API_KEY` | `gpt-4o-mini` |
-| **Gemini** | `GOOGLE_API_KEY` | `gemini-3.8-flash` |
+### Without API key (rule-based, free)
 
-Override the model in `vigil.yaml`:
-```yaml
-scorer_model: "openai/gpt-4o-mini"        # via OpenRouter
-scorer_model: "anthropic/claude-3-haiku"   # Claude via OpenRouter
-scorer_model: "gpt-4o-mini"               # direct OpenAI
-```
-
-### Rule-Based (no API key)
-
-Without any API key, vigil uses deterministic checks:
-- `contains` → keyword presence check
-- `min_length` → character count
-- `contains_numbers` → regex for digits
-
-Scores are still tracked and drift is still detected — just less nuanced.
+Checks `contains` keywords, `min_length`, `contains_numbers` deterministically. Less nuanced but $0 cost. Still tracks drift.
 
 ---
 
-## Use on Any Repo / Endpoint
-
-Vigil tests your AI **from the outside** via HTTP. It doesn't live inside your codebase.
-
-### Step 1: Know your endpoint
-
-| Your AI app | Endpoint to use |
-|---|---|
-| FastAPI server | `http://localhost:8000/chat` |
-| Deployed on Vercel | `https://my-app.vercel.app/api/ask` |
-| AWS Lambda | `https://xyz.execute-api.us-east-1.amazonaws.com/prod/ask` |
-| Internal service | `http://internal-service:8080/query` |
-
-### Step 2: Know the response format
-
-If your API returns:
-```json
-{"response": "Here is the answer..."}
-```
-Set `response_field: "response"` in `vigil.yaml`.
-
-If it returns:
-```json
-{"data": {"answer": "Here is..."}}
-```
-Vigil tries common field names: `response`, `answer`, `content`, `text`, `message`, `output`.
-
-### Step 3: Write test queries
-
-Pick 5-10 queries that cover your app's key use cases. For each, define what a good answer looks like:
-
-```yaml
-tests:
-  # Simple factual query
-  - name: "refund_policy"
-    query: "What is the refund policy?"
-    expect:
-      contains: ["30 days"]
-
-  # Complex reasoning query
-  - name: "plan_comparison"
-    query: "Compare Pro vs Enterprise plans in detail"
-    expect:
-      min_length: 100
-      contains_numbers: true
-
-  # Edge case
-  - name: "unknown_topic"
-    query: "Do you offer quantum computing services?"
-    expect:
-      tone: "helpful"
-      no_hallucination: true
-```
-
-### Step 4: Run
+## Dashboard
 
 ```bash
-# First time — set the baseline
-vigil baseline -c vigil.yaml
-
-# After any change (model swap, config update, new deploy):
-vigil run -c vigil.yaml
-
-# Continuous monitoring:
-vigil watch -c vigil.yaml --every 60
+vigil dashboard --db vigil_history.db
+# Open http://localhost:9090
 ```
+
+Dark-themed visual dashboard showing:
+- **Health banner** — overall score, pass/degraded/failed counts
+- **Quality over time** — line chart per test with baseline reference
+- **Test results table** — score, drift %, status, reasoning
+- **Score distribution** — horizontal bar chart
+- **Run history** — color-coded pills per run
 
 ---
 
-## Demo: Catching Real Degradation
-
-This demo proves vigil catches quality drops from real production changes — no mocking, no tampering.
-
-### Prerequisites
+## Demo: Try It Yourself
 
 ```bash
-# Clone the repo
-git clone <repo-url> && cd vigil
-
-# Install
+git clone <repo> && cd vigil
 pip install -e ".[openai]"
+echo "OPENROUTER_API_KEY=your-key" > .env
 
-# Set your OpenRouter key (get one free at https://openrouter.ai/keys)
-# Create .env file:
-echo "OPENROUTER_API_KEY=sk-or-v1-your-key-here" > .env
-```
-
-### Run the automated demo
-
-```bash
+# Automated demo (3 scenarios, ~3 min)
 python demo/run_demo.py
+
+# Visual dashboard after demo
+vigil dashboard --db demo/demo_history.db
 ```
-
-This runs 3 scenarios automatically (~3 minutes):
-
-| Scenario | What happens | Expected result |
-|---|---|---|
-| 1. **Baseline** | Good model (`openai/gpt-4o-mini`) + full knowledge base | Scores 0.97+ avg — all tests pass |
-| 2. **Model swap** | Cheap free model (`liquid/lfm-2.5-2.6b:free`) | Simple tests pass, complex tests degrade |
-| 3. **Corrupted docs** | Good model but outdated/vague knowledge base | All tests degrade — no facts to answer with |
-
-### Actual demo output (November 2026)
-
-**Scenario 1 — Baseline (GPT-4o-mini):**
-```
-  Baseline set:
-    return_policy             1.00
-    pricing_details           1.00
-    business_hours            1.00
-    security_certs            0.80
-    enterprise_vs_pro         1.00
-    support_sla               1.00
-```
-
-**Scenario 2 — Free model swap:**
-```
-    OK  return_policy             1.00  (baseline: 1.00)  +0%
-    OK  pricing_details           1.00  (baseline: 1.00)  +0%
-    OK  business_hours            1.00  (baseline: 1.00)  +0%
-    OK  security_certs            1.00  (baseline: 0.80)  +25%
-    !!  enterprise_vs_pro         0.00  (baseline: 1.00)  -100% DEGRADED
-    OK  support_sla               1.00  (baseline: 1.00)  +0%
-
-  !!! QUALITY ALERTS !!!
-  !! enterprise_vs_pro: score dropped 100.0% (1.00 -> 0.00)
-```
-
-The free 2.6B model handles simple factual questions fine but **fails on the complex comparison question** — exactly the kind of nuanced degradation that goes unnoticed in production.
-
-**Scenario 3 — Corrupted knowledge base:**
-```
-    !!  return_policy             0.00  (baseline: 1.00)  -100% DEGRADED
-    !!  pricing_details           0.00  (baseline: 1.00)  -100% DEGRADED
-    ... (all 6 tests degraded)
-
-  !!! QUALITY ALERTS !!!
-  !! return_policy: score dropped 100.0% (1.00 -> 0.00)
-  !! pricing_details: score dropped 100.0% (1.00 -> 0.00)
-  ...
-```
-
-### Run each scenario manually
-
-**Terminal 1 — Start the RAG app:**
-
-```bash
-# Good model + good docs (baseline)
-python demo/rag_app.py
-
-# Cheap model (cost-cutting simulation)
-python demo/rag_app.py --model liquid/lfm-2.5-2.6b:free
-
-# Good model + corrupted docs (stale index simulation)
-python demo/rag_app.py --corrupt-context
-```
-
-**Terminal 2 — Run vigil:**
-
-```bash
-# Set baseline (first time, with good model running)
-vigil baseline -c demo/vigil.yaml --db demo/history.db
-
-# Switch the RAG app to cheap model (Ctrl+C terminal 1, restart with --model flag)
-# Then run vigil again:
-vigil run -c demo/vigil.yaml --db demo/history.db
-
-# View score history:
-vigil history --db demo/history.db
-
-# View specific test trend:
-vigil history --test enterprise_vs_pro --db demo/history.db
-```
-
-### What the demo teaches
-
-| Production failure | How vigil catches it |
-|---|---|
-| Team swaps to cheaper model to save costs | Complex queries fail, simple ones pass. Vigil alerts on the specific tests that degraded |
-| Stale/corrupted vector index deployed | All queries return vague answers. Vigil detects all scores dropped vs baseline |
-| Model provider silently updates model | Scores drift over time. `vigil watch` catches the trend |
-
----
-
-## MCP Integration
-
-Expose vigil as tools for Claude Code, Claude Desktop, or Cursor.
-
-### Setup
-
-```bash
-# Claude Code
-claude mcp add vigil -- python -m vigil_ai
-
-# Claude Desktop — add to claude_desktop_config.json:
-{
-  "mcpServers": {
-    "vigil": {
-      "command": "python",
-      "args": ["-m", "vigil_ai"],
-      "env": {
-        "OPENROUTER_API_KEY": "your-key"
-      }
-    }
-  }
-}
-```
-
-### Available tools
-
-| Tool | What you ask Claude |
-|---|---|
-| `vigil_run` | "Check my AI quality" / "Run quality tests" |
-| `vigil_history` | "Show quality history" / "How has quality trended?" |
-| `vigil_baseline` | "Set a new quality baseline" |
-| `vigil_init` | "Create a vigil config for my app" |
 
 ---
 
 ## CI/CD Integration
 
-### GitHub Actions
-
 ```yaml
-# .github/workflows/vigil.yml
-name: AI Quality Check
+# .github/workflows/vigil.yml — runs on schedule, NOT on deploy
+name: AI Quality Monitor
 on:
   schedule:
-    - cron: '0 */6 * * *'     # every 6 hours
-  push:
-    branches: [main]           # also on deploy
+    - cron: '0 */6 * * *'    # every 6 hours — catches data changes between deploys
 
 jobs:
   vigil:
@@ -497,19 +339,39 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: pip install vigil-ai openai
-      - run: vigil run -c vigil.yaml
+      - run: vigil run
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
 ```
 
-Vigil exits with code 1 when alerts fire — the CI job fails, notifying your team.
+**Key: triggered by `schedule`, not `push`.** That's the whole point — catching what deploys don't trigger.
 
-### Cron (Linux/Mac)
+---
+
+## MCP Integration
 
 ```bash
-# Check every 6 hours
-0 */6 * * * cd /path/to/project && OPENROUTER_API_KEY=your-key vigil run -c vigil.yaml 2>&1 | tee -a /var/log/vigil.log
+# Claude Code
+claude mcp add vigil -- python -m vigil_ai
+
+# Ask Claude: "Check my AI quality" / "Show quality history"
 ```
+
+---
+
+## vigil vs Eval Frameworks
+
+| | CI Evals (Promptfoo, DeepEval) | vigil |
+|---|---|---|
+| **Triggered by** | Code deploys | **Time (schedule)** |
+| **Catches** | Code bugs | **Data bugs** |
+| **Tests against** | Staging / test fixtures | **Live production** |
+| **Tracks trends** | No (point-in-time) | **Yes (baseline + drift)** |
+| **Cost** | Free | ~$0.90/month |
+| **Setup** | Eval framework + CI config | **YAML + one command** |
+| **Use when** | You change prompts/models | **Data changes without deploys** |
+
+**They're complementary, not competing.** Use CI evals for code changes. Use vigil for everything else.
 
 ---
 
@@ -518,26 +380,21 @@ Vigil exits with code 1 when alerts fire — the CI job fails, notifying your te
 ```
 vigil/
 ├── src/vigil_ai/
-│   ├── config.py         # YAML config parser
-│   ├── runner.py         # HTTP test runner
-│   ├── scorer.py         # LLM-as-judge (OpenRouter/OpenAI/Gemini) + rule-based fallback
-│   ├── tracker.py        # SQLite history + drift detection + baselines
-│   ├── alerter.py        # Console + webhook (Slack/Discord) alerts
-│   ├── cli.py            # CLI: run, watch, baseline, history, init
-│   └── mcp_server.py     # MCP server for Claude Code / Cursor
-├── demo/
-│   ├── rag_app.py        # Demo RAG app (good/cheap model + good/corrupted docs)
-│   ├── run_demo.py       # Automated 3-scenario demo
-│   └── vigil.yaml        # Demo test suite
-├── tests/
-│   └── test_core.py      # 16 tests (all mock-based, zero API calls)
-└── .env                  # API keys (gitignored, never committed)
+│   ├── config.py          # YAML config parser
+│   ├── runner.py          # HTTP test runner
+│   ├── scorer.py          # LLM judge (OpenRouter/OpenAI/Gemini) + rule-based
+│   ├── tracker.py         # SQLite history + baselines + drift detection
+│   ├── alerter.py         # Console + webhook alerts
+│   ├── dashboard.py       # Visual dashboard (Chart.js)
+│   ├── cli.py             # CLI: run, watch, baseline, history, dashboard, init
+│   └── mcp_server.py      # MCP server for Claude Code / Cursor
+├── demo/                  # RAG app demo with degradation scenarios
+└── tests/                 # 16 tests (mock-based, zero API calls)
 ```
 
-- **Zero infrastructure** — SQLite for history, YAML for config. No server needed
-- **Any AI endpoint** — just needs HTTP. Works with any framework
-- **Provider-agnostic** — OpenRouter, OpenAI, Gemini, or no LLM at all (rule-based)
-- **Minimal dependencies** — `pyyaml` + one LLM SDK (optional)
+- **Zero infrastructure** — SQLite + YAML. No server, no database, no cloud
+- **Any endpoint** — just HTTP. Works with any AI framework
+- **5-minute setup** — `vigil init` → edit YAML → `vigil watch`
 
 ---
 
