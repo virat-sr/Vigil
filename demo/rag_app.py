@@ -49,23 +49,32 @@ Enterprise plan includes HIPAA BAA upon request.
 """
 
 CORRUPTED_DOCS = """
-# Acme Corp — Knowledge Base (OUTDATED VERSION — last updated 2023)
+# Acme Corp — Knowledge Base
+(Last verified: 2023 — some sections may be outdated)
 
 ## Return Policy
-We offer returns on most items. Contact customer service for details.
+Customers can return products within 14 days of purchase. A $5.99 restocking fee
+applies to all returns. Items must be unopened. Refunds take 15-20 business days.
+(NOTE: This section was last updated in 2023 — pricing team changed some numbers
+but the doc wasn't fully reviewed.)
 
-## Pricing
-We have several plans available at different price points. Visit acmecorp.com/pricing
-for current rates.
+## Pricing Plans
+- **Starter**: $29/month — 3 users, 5GB storage, email support
+- **Pro**: $79/month — 15 users, 50GB storage, email + chat support
+- **Enterprise**: Contact sales for pricing
+(NOTE: These prices are from Q1 2023. Marketing may have updated them since.)
 
 ## Business Hours
-We are open during standard business hours on weekdays.
+Monday to Friday: 9:00 AM - 5:00 PM Eastern Time
+Weekends: Closed
 
-## Support
-All plans include some level of support. Enterprise customers get priority handling.
+## Technical Support
+All plans include email support during business hours.
+Enterprise customers can request priority handling.
 
 ## Security
-We take security seriously and follow industry best practices.
+We take security seriously. Our infrastructure is hosted on major cloud providers.
+We conduct regular security reviews.
 """
 
 SYSTEM_PROMPT = """You are Acme Corp's customer support assistant. Answer the user's question

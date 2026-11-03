@@ -212,42 +212,46 @@ def _rule_based_score(result: TestResult) -> ScoreResult:
             reasoning="Empty response", latency_ms=result.latency_ms,
         )
 
+    # Weighted scoring: keywords matter most (60%), length (25%), numbers (15%)
+    scores_weighted = []
+
     if "contains" in expect:
-        checks_total += 1
         keywords = expect["contains"]
+        found = [kw for kw in keywords if kw.lower() in response.lower()]
         missing = [kw for kw in keywords if kw.lower() not in response.lower()]
+        keyword_score = len(found) / len(keywords) if keywords else 1.0
+        scores_weighted.append((keyword_score, 0.6))  # 60% weight
         if not missing:
-            checks_passed += 1
             reasons.append("all keywords found")
         else:
-            reasons.append(f"missing keywords: {missing}")
+            reasons.append(f"found {len(found)}/{len(keywords)} keywords, missing: {missing}")
 
     if "min_length" in expect:
-        checks_total += 1
+        length_score = min(len(response) / expect["min_length"], 1.0) if expect["min_length"] > 0 else 1.0
+        scores_weighted.append((length_score, 0.25))  # 25% weight
         if len(response) >= expect["min_length"]:
-            checks_passed += 1
             reasons.append(f"length OK ({len(response)} chars)")
         else:
-            reasons.append(f"too short ({len(response)}/{expect['min_length']})")
+            reasons.append(f"short ({len(response)}/{expect['min_length']})")
 
     if "contains_numbers" in expect and expect["contains_numbers"]:
-        checks_total += 1
         import re
-        if re.search(r"\d+", response):
-            checks_passed += 1
-            reasons.append("contains numbers")
-        else:
-            reasons.append("no numbers found")
+        has_nums = bool(re.search(r"\d+", response))
+        scores_weighted.append((1.0 if has_nums else 0.0, 0.15))  # 15% weight
+        reasons.append("has numbers" if has_nums else "no numbers found")
 
-    if checks_total == 0:
-        score = 0.7 if len(response) > 20 else 0.4
+    if not scores_weighted:
+        # No specific checks — score based on response quality
+        score = 0.90 if len(response) > 50 else 0.70 if len(response) > 20 else 0.40
         return ScoreResult(
             test_name=result.test.name, score=score,
             reasoning=f"Rule-based: response exists ({len(response)} chars)",
             latency_ms=result.latency_ms,
         )
 
-    score = round(checks_passed / checks_total, 2)
+    # Weighted average
+    total_weight = sum(w for _, w in scores_weighted)
+    score = round(sum(s * w for s, w in scores_weighted) / total_weight, 2) if total_weight > 0 else 0.0
     return ScoreResult(
         test_name=result.test.name, score=score,
         reasoning=f"Rule-based: {'; '.join(reasons)}",

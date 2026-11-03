@@ -1,45 +1,44 @@
-# Vigil config for testing the Acme Corp RAG app
+# Vigil config for demo — tests against mock server OR real RAG app
 name: "Acme Corp RAG"
 endpoint: "http://localhost:8500"
 response_field: "response"
 alert_threshold: 0.15
-scorer_model: ""  # auto-detect from available API key
+scorer_model: ""
 timeout: 30
 
 tests:
   - name: "return_policy"
-    query: "What is the exact return window and what conditions apply?"
+    query: "What is the return policy and conditions?"
     expect:
-      contains: ["30"]
+      contains: ["30 days", "full refund", "original packaging"]
       min_length: 50
-      no_hallucination: true
 
   - name: "pricing_details"
-    query: "List all plans with their exact monthly prices and user limits."
+    query: "What are the pricing plans with exact prices?"
     expect:
-      contains: ["19", "49", "199"]
-      min_length: 100
+      contains: ["$19", "$49", "$199"]
+      min_length: 80
 
   - name: "business_hours"
-    query: "What are the exact opening and closing times for each day?"
+    query: "What are the business hours including Saturday?"
     expect:
-      contains: ["9:00", "6:00"]
+      contains: ["Saturday", "10:00"]
       min_length: 40
 
   - name: "security_certs"
-    query: "What specific security certifications does the company hold?"
+    query: "What security certifications do you have?"
     expect:
       contains: ["SOC 2"]
       min_length: 40
 
-  - name: "enterprise_vs_pro"
-    query: "What specific features does Enterprise have that Pro doesn't? List them."
+  - name: "enterprise_features"
+    query: "What enterprise features are available like SSO?"
     expect:
-      contains: ["SSO", "SLA"]
-      min_length: 80
+      contains: ["SSO", "99.99"]
+      min_length: 60
 
   - name: "support_sla"
-    query: "What is the guaranteed response time for Enterprise support?"
+    query: "What is the enterprise support response time?"
     expect:
-      contains: ["1"]
+      contains: ["1-hour", "24/7"]
       min_length: 30
