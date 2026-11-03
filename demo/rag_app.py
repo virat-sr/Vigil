@@ -49,9 +49,23 @@ Enterprise plan includes HIPAA BAA upon request.
 """
 
 CORRUPTED_DOCS = """
-# Company FAQ
-Q: What do you sell? A: Various products and services.
-Q: How do I contact you? A: Visit our website.
+# Acme Corp — Knowledge Base (OUTDATED VERSION — last updated 2023)
+
+## Return Policy
+We offer returns on most items. Contact customer service for details.
+
+## Pricing
+We have several plans available at different price points. Visit acmecorp.com/pricing
+for current rates.
+
+## Business Hours
+We are open during standard business hours on weekdays.
+
+## Support
+All plans include some level of support. Enterprise customers get priority handling.
+
+## Security
+We take security seriously and follow industry best practices.
 """
 
 SYSTEM_PROMPT = """You are Acme Corp's customer support assistant. Answer the user's question
@@ -94,25 +108,35 @@ class RAGHandler(BaseHTTPRequestHandler):
 
         system = SYSTEM_PROMPT.format(context=self.context)
 
-        try:
-            if self.provider in ("openrouter", "openai"):
-                resp = self.__class__.client.chat.completions.create(
-                    model=self.model_name,
-                    messages=[
-                        {"role": "system", "content": system},
-                        {"role": "user", "content": query},
-                    ],
-                    temperature=0,
-                )
-                answer = resp.choices[0].message.content
-            else:  # gemini
-                resp = self.__class__.client.models.generate_content(
-                    model=self.model_name,
-                    contents=f"{system}\n\n## User Question\n{query}\n\nAnswer:",
-                )
-                answer = resp.text
-        except Exception as e:
-            answer = f"Sorry, I encountered an error: {e}"
+        import time as _time
+        answer = None
+        for attempt in range(3):
+            try:
+                if self.provider in ("openrouter", "openai"):
+                    resp = self.__class__.client.chat.completions.create(
+                        model=self.model_name,
+                        messages=[
+                            {"role": "system", "content": system},
+                            {"role": "user", "content": query},
+                        ],
+                        temperature=0,
+                    )
+                    answer = resp.choices[0].message.content
+                else:  # gemini
+                    resp = self.__class__.client.models.generate_content(
+                        model=self.model_name,
+                        contents=f"{system}\n\n## User Question\n{query}\n\nAnswer:",
+                    )
+                    answer = resp.text
+                break
+            except Exception as e:
+                if "429" in str(e) and attempt < 2:
+                    _time.sleep(2 * (attempt + 1))  # backoff: 2s, 4s
+                    continue
+                answer = f"Sorry, I encountered an error: {e}"
+                break
+        if answer is None:
+            answer = "Sorry, request failed after retries."
 
         self.send_response(200)
         self.send_header("Content-Type", "application/json")

@@ -41,8 +41,12 @@ def _execute_run(config, tracker, webhook=None):
         status = "OK" if tr.success else "ERR"
         print(f"    [{status}] {tr.test.name} ({tr.latency_ms:.0f}ms)", flush=True)
 
-    print(f"\n  Scoring with {config.scorer_model}...\n", flush=True)
+    print(f"\n  Scoring with {config.scorer_model or 'auto-detect'}...\n", flush=True)
     scores = score_all(test_results, model=config.scorer_model)
+    # Show reasoning for low scores (helps debug scoring issues)
+    for s in scores:
+        if s.score < 0.5:
+            print(f"    [{s.test_name}] score={s.score:.2f}: {s.reasoning[:120]}", flush=True)
 
     run_id = tracker.record_run(scores, config.name)
     baselines = tracker.get_all_baselines()

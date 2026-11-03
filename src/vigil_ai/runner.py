@@ -96,10 +96,13 @@ def run_test(test: TestCase, config: HealthcheckConfig) -> TestResult:
         )
 
 
-def run_all(config: HealthcheckConfig) -> list[TestResult]:
+def run_all(config: HealthcheckConfig, delay: float = 0.5) -> list[TestResult]:
     """Run all test cases against the endpoint."""
+    import time as _time
     results = []
-    for test in config.tests:
+    for i, test in enumerate(config.tests):
+        if i > 0 and delay > 0:
+            _time.sleep(delay)  # avoid rate limits on free-tier APIs
         result = run_test(test, config)
         results.append(result)
     return results

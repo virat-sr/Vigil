@@ -30,7 +30,7 @@ DB_PATH = str(DEMO_DIR / "demo_history.db")
 PORT = 8500
 
 GOOD_MODEL = "openai/gpt-4o-mini"
-CHEAP_MODEL = "meta-llama/llama-3.3-8b-instruct:free"
+CHEAP_MODEL = "liquid/lfm-2.5-2.6b:free"  # 2.6B params — will struggle on detailed questions
 
 
 def _load_env():

@@ -255,6 +255,12 @@ def _rule_based_score(result: TestResult) -> ScoreResult:
     )
 
 
-def score_all(test_results: list[TestResult], model: str = "") -> list[ScoreResult]:
+def score_all(test_results: list[TestResult], model: str = "", delay: float = 1.0) -> list[ScoreResult]:
     """Score all test results. Auto-detects provider from env vars and model name."""
-    return [score_result(tr, model) for tr in test_results]
+    import time as _time
+    results = []
+    for i, tr in enumerate(test_results):
+        if i > 0 and delay > 0:
+            _time.sleep(delay)  # avoid rate limits on judge API
+        results.append(score_result(tr, model))
+    return results
