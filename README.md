@@ -1,49 +1,53 @@
 # vigil 🔭
 
-**Scheduled quality monitor for AI systems where data changes without deploys.**
+**Scheduled quality monitor for AI systems where data changes without pipelines.**
 
-Your CI evals pass on every deploy. But your AI's quality depends on more than code — it depends on **data that changes without anyone deploying anything.** Vigil catches what CI can't: quality degradation caused by data changes, not code changes.
+CI evals catch code bugs. Reindex hooks catch reindex bugs. But what catches the support agent who edits a Confluence article, the partner whose API changes format, or the five different teams updating five different data sources your RAG pulls from?
+
+**Vigil does.** It tests your live AI on a schedule — not triggered by deploys or pipelines, but by time.
 
 ---
 
-## The Problem CI Evals Can't Solve
+## The Problem
 
-CI evals are triggered by **code changes**. But most AI quality issues come from **data changes**:
+Every data change that degrades AI quality doesn't come with a pipeline you can hook evals into.
 
-```
-Monday:    Deploy. CI evals pass.                    ✅
-Tuesday:   Content team updates 200 FAQ articles.    (no deploy)
-Wednesday: Nightly RAG reindex runs.                 (no deploy)
-Thursday:  User: "Your bot gave me wrong pricing."   ❌
-Friday:    Team discovers the FAQ edit broke pricing answers 3 days ago.
-```
+### "Just add evals to the pipeline" — works when there IS a pipeline
 
-**CI never ran. Nobody deployed. But quality broke.**
-
-### Real scenarios CI evals will never catch:
-
-| What changed | Why it broke AI quality | Was there a deploy? |
+| Data change | Pipeline exists? | Can you add eval hook? |
 |---|---|---|
-| Content team edited the refund policy doc | RAG now retrieves outdated chunks about refunds | **No** |
-| Nightly reindex job embedded 500 new docs with bad formatting | Retrieval quality dropped — garbled chunks ranked higher | **No** |
-| Product team updated pricing in the database | AI still serves old pricing from stale embeddings | **No** |
-| Embedding model got deprecated, pipeline silently falls back | New embeddings are incompatible with old ones in the index | **No** |
-| Vector DB rebalanced after growing 10x | Similarity scores shifted, different chunks returned for same queries | **No** |
-| Third-party data feed changed format | AI's grounding data is now garbage | **No** |
-| Support team deleted a "redundant" article | That article was the only source for a common question | **No** |
-| Peak traffic — self-hosted model batches aggressively | Response quality drops under load, recovers at night | **No** |
+| Code deploy | ✅ CI/CD | ✅ Yes — add eval step |
+| Automated reindex | ✅ Cron/Airflow | ✅ Yes — add eval step after reindex |
 
-**None of these trigger CI. All of them degrade quality. Users notice. Your team doesn't — until it's too late.**
+**Vigil is not for these.** Your CI handles them fine.
+
+### Vigil is for when there is NO pipeline
+
+| Data change | Pipeline exists? | Can you add eval hook? |
+|---|---|---|
+| Support agent edits FAQ article in Confluence | ❌ It's a CMS. No pipeline | ❌ **No** |
+| Content writer updates pricing page in Notion | ❌ It's a wiki. No pipeline | ❌ **No** |
+| Legal team revises refund policy in SharePoint | ❌ It's a doc. No pipeline | ❌ **No** |
+| Partner API changes response format silently | ❌ Not your system | ❌ **No** |
+| Scraped website updates their layout | ❌ Not your system | ❌ **No** |
+| 5 teams update 5 data sources on different schedules | ❌ No unified pipeline | ❌ **No** |
+| Embedding quality degrades as index grows 10x over 3 months | ❌ No single event caused it | ❌ **No** |
+| Peak traffic — self-hosted model batches aggressively | ❌ Load-dependent, time-of-day | ❌ **No** |
+
+**There is no deploy. There is no reindex. There is no pipeline. A human edited a page in a CMS. Your RAG scraped it. Your AI now gives wrong answers. Where do you put the eval hook?**
 
 ### The gap
 
 ```
-CODE changes  ──triggers──→  CI evals  ──→  catches code bugs        ✅
-DATA changes  ──triggers──→  nothing   ──→  silent degradation       ❌
-TIME passes   ──triggers──→  vigil     ──→  catches data-driven bugs ✅
+Code changes     ──CI──→        evals run  ✅  (you handle this)
+Automated reindex ──pipeline──→  evals run  ✅  (you can handle this)
+CMS edits         ──nothing──→   ???        ❌  ← vigil
+External data     ──nothing──→   ???        ❌  ← vigil
+Multiple sources  ──nothing──→   ???        ❌  ← vigil
+Gradual drift     ──nothing──→   ???        ❌  ← vigil
 ```
 
-**Vigil runs on a schedule, not on deploys.** It tests your live production endpoint — with the real data, real index, real load — and alerts when quality drops.
+**Vigil runs on a timer, not a trigger.** Every 6 hours, it sends test queries to your live endpoint and checks if the answers are still correct — regardless of what changed or didn't change.
 
 ---
 
@@ -117,84 +121,128 @@ You investigate → find out the content team edited the pricing page yesterday.
 
 ## Real-World Examples
 
-### Example 1: Content Team Edits Break RAG
+### Example 1: Support Agent Edits Confluence Article
 
-**Company:** E-commerce with AI customer support chatbot.
-
-```
-Before:  Knowledge base article says "Returns within 30 days for full refund."
-         Vigil baseline: refund_policy = 1.00 ✅
-
-Content team edits:  Replaces article with "See our returns page for details."
-         (No code deployed. No CI triggered.)
-
-Next vigil run:  refund_policy = 0.20 ❌
-         Alert: "refund_policy dropped 80% from baseline"
-
-Action:  Team reverts the article. Quality restored in minutes.
-Without vigil:  Users get vague refund answers for days until someone complains.
-```
-
-### Example 2: Nightly Reindex Corrupts Chunks
-
-**Company:** SaaS with internal docs RAG for engineers.
+**Scenario:** E-commerce company. AI chatbot answers customer questions using RAG over Confluence docs.
 
 ```
-Before:  RAG index has 10K clean document chunks.
-         Vigil baseline: all 8 tests pass, avg 0.95 ✅
+Before:
+  Confluence article: "Returns accepted within 30 days for full refund.
+                       Items must be unused, original packaging."
+  Vigil baseline: refund_policy = 1.00 ✅
 
-Nightly reindex:  New ETL pipeline introduces HTML tags in chunks.
-         Chunks now contain "<div class='content'>The API supports..." 
-         Retrieval quality drops — garbled chunks rank higher.
-         (No code deployed. No CI triggered.)
+What happened:
+  Support agent edits the article to: "Please see our returns page for current policy."
+  They thought they were reducing duplicate content.
+  No deploy. No reindex. No pipeline. Just a Confluence edit.
+  RAG's live crawler picks it up within hours.
 
-Next vigil run:  avg score 0.45 ❌
-         Alert on 6/8 tests degraded
+Next vigil run (6 hours later):
+  refund_policy = 0.20 ❌
+  Alert: "refund_policy dropped 80% — response missing '30 days', 'full refund'"
 
-Action:  Team finds the ETL bug, fixes it, re-indexes.
-Without vigil:  Engineers get bad answers for a week. File tickets. Blame the AI.
+Resolution:
+  Team finds the Confluence edit, reverts it. Quality restored.
+  Total downtime: 6 hours (instead of days).
+
+Without vigil:
+  Customers get vague refund answers for 5 days.
+  3 support tickets escalated. CSAT drops.
+  Nobody connects the dots to the Confluence edit.
 ```
 
-### Example 3: Stale Embeddings After Pricing Change
+**Why CI can't catch this:** There is no pipeline between "agent clicks Save in Confluence" and "AI serves wrong answers." You can't add eval hooks to Confluence page saves.
 
-**Company:** B2B SaaS. AI answers pricing questions.
+### Example 2: Partner API Changes Response Format
 
-```
-Before:  Pro plan is $49/month. Embedded in vector DB.
-         Vigil test: "How much is Pro?" → expects "49" → score 1.00 ✅
-
-Product team changes pricing:  Pro is now $59/month. Updated on website.
-         But nobody re-embedded the pricing docs.
-         RAG still retrieves the old "$49" chunk.
-         (No code deployed. No CI triggered.)
-
-Next vigil run:  pricing test still passes (old embedding says $49) ✅
-         BUT: You update your vigil.yaml to expect "59" after the pricing change.
-         Next run: pricing = 0.00 ❌ — "49" found instead of "59"
-         Alert: pricing dropped 100%
-
-Action:  Team re-embeds pricing docs. Index updated.
-Without vigil:  AI quotes wrong price to customers for weeks. Revenue impact.
-```
-
-### Example 4: Peak Load Degrades Self-Hosted Model
-
-**Company:** Healthcare AI running local model for privacy.
+**Scenario:** Travel booking AI that pulls hotel availability from a partner API.
 
 ```
-Before:  Off-peak: model serves detailed, accurate answers.
-         Vigil baseline (set at 3 AM): avg 0.92 ✅
+Before:
+  Partner API returns: {"price": "$199", "available": true}
+  AI answers: "The hotel is $199/night and available."
+  Vigil baseline: hotel_pricing = 1.00 ✅
 
-9 AM peak traffic:  Model batches aggressively to handle load.
-         Responses get shorter, less detailed, miss key info.
-         (No deploy. Load-dependent degradation.)
+What happened:
+  Partner updates their API. Now returns: {"rate": "199.00", "status": "OPEN"}
+  Different field names. Different format. No notification to you.
+  Your parser still works (no crash) but extracts wrong data.
+  No deploy. Not your system. No pipeline to hook into.
 
-Vigil run at 10 AM:  avg 0.61 ❌
-         Alert on 4/6 tests degraded
+Next vigil run:
+  hotel_pricing = 0.10 ❌
+  Alert: "hotel_pricing dropped 90% — response missing price info"
 
-Action:  Team scales up GPU instances during peak hours.
-Without vigil:  Doctors get incomplete answers during the busiest hours. Patient safety risk.
+Resolution:
+  Team updates parser for new format. Fixes in hours.
+
+Without vigil:
+  AI shows "price unavailable" for 2 weeks.
+  Users book through competitors. Revenue lost.
 ```
+
+**Why CI can't catch this:** The partner changed THEIR system. You have no pipeline, no trigger, no webhook for "partner updated their API format."
+
+### Example 3: Five Teams, Five Data Sources, No Unified Pipeline
+
+**Scenario:** Enterprise internal AI assistant. RAG pulls from 5 sources.
+
+```
+Data sources:
+  1. Confluence (HR policies)     — edited by HR team
+  2. Zendesk (support articles)   — edited by support team
+  3. Product wiki (feature docs)  — edited by product team
+  4. API docs (auto-generated)    — updated by CI
+  5. Slack archives (discussions) — continuously updated
+
+What happened:
+  - HR rewrote the PTO policy in Confluence (Tuesday)
+  - Support archived 50 old articles in Zendesk (Wednesday)
+  - Product renamed a feature in the wiki (Thursday)
+  None of these teams coordinated. None triggered a deploy.
+
+Vigil run Thursday evening:
+  pto_policy = 0.30 ❌ (HR rewrote it, new wording doesn't match expectations)
+  feature_question = 0.00 ❌ (renamed feature, old name not found)
+  support_process = 0.50 ❌ (archived articles were the RAG source for this)
+
+Resolution:
+  AI team updates embeddings for changed docs. Adjusts vigil.yaml expectations.
+
+Without vigil:
+  Employees get wrong PTO info, outdated feature names, broken support answers.
+  Nobody realizes 3 different edits by 3 different teams caused 3 different failures.
+```
+
+**Why CI can't catch this:** You'd need eval hooks in Confluence AND Zendesk AND the wiki AND Slack. Across 4 teams who don't know your AI exists. That's not realistic.
+
+### Example 4: Gradual Drift — No Single Event
+
+**Scenario:** Legal AI that answers contract questions from a 50K document index.
+
+```
+Month 1:  Index has 50K docs. Retrieval precision is excellent.
+          Vigil baseline: avg 0.94 ✅
+
+Month 2:  Index grows to 75K docs. Slightly more noise in retrieval.
+          Vigil: avg 0.91 (within threshold, no alert)
+
+Month 3:  Index at 100K docs. Similar docs compete for retrieval slots.
+          Vigil: avg 0.85 ⚠️ Alert: "avg dropped 9.6% from baseline"
+
+Month 4:  Index at 120K. Retrieval regularly pulls wrong contract type.
+          Vigil: avg 0.72 ❌ Alert: "contract_type dropped 28%"
+
+Resolution:
+  Team implements better chunking strategy and metadata filtering.
+
+Without vigil:
+  Lawyers get wrong contract clauses. Nobody notices the slow degradation
+  because each week is only 1-2% worse. After 4 months: 22% total drop.
+  No single event caused it. No deploy to blame. No CI run to catch it.
+```
+
+**Why CI can't catch this:** There is no event to trigger evals. Quality degrades 1% per week. Each individual change is invisible. Only the trend line reveals it — and CI doesn't track trends across runs.
 
 ---
 
@@ -359,16 +407,27 @@ claude mcp add vigil -- python -m vigil_ai
 
 ---
 
-## vigil vs Eval Frameworks
+## vigil vs Eval Frameworks — When to Use What
+
+| Scenario | Best tool | Why |
+|---|---|---|
+| You push code, want to test before deploy | **CI evals (Promptfoo, DeepEval)** | Triggered by deploy, tests your code changes |
+| You run a reindex, want to verify after | **Eval hook in reindex pipeline** | Add eval step after reindex completes |
+| Content team edits docs in CMS | **vigil** | No pipeline exists to hook into |
+| External data source changes | **vigil** | Not your system, no trigger available |
+| Multiple teams update data independently | **vigil** | No unified pipeline across teams |
+| Slow quality drift over months | **vigil** | No single event to trigger evals, only trend reveals it |
+| You want to monitor production 24/7 | **vigil** | Runs on schedule regardless of what changed |
 
 | | CI Evals (Promptfoo, DeepEval) | vigil |
 |---|---|---|
-| **Triggered by** | Code deploys | **Time (schedule)** |
-| **Catches** | Code bugs | **Data bugs** |
-| **Tests against** | Staging / test fixtures | **Live production** |
-| **Tracks trends** | No (point-in-time) | **Yes (baseline + drift)** |
+| **Triggered by** | Code deploys / pipeline hooks | **Time (every N hours)** |
+| **Catches** | Code bugs, model changes | **Data bugs, CMS edits, external changes, drift** |
+| **Requires** | Pipeline to hook into | **Just an HTTP endpoint** |
+| **Tracks trends** | No (point-in-time) | **Yes (baseline + drift detection)** |
 | **Cost** | Free | ~$0.90/month |
-| **Setup** | Eval framework + CI config | **YAML + one command** |
+
+**They're complementary.** CI evals for what you control. Vigil for what you don't.
 | **Use when** | You change prompts/models | **Data changes without deploys** |
 
 **They're complementary, not competing.** Use CI evals for code changes. Use vigil for everything else.
