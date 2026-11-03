@@ -356,30 +356,185 @@ Dark-themed visual dashboard showing:
 
 ---
 
-## Demo: Try It Yourself
+## Demo: Step-by-Step (Record This for Video)
+
+Everything below runs in one terminal. No API key needed for the basic demo.
+
+### Step 1: Install
 
 ```bash
-git clone <repo> && cd vigil
-pip install -e ".[openai]"
-echo "OPENROUTER_API_KEY=your-key" > .env
-
-# Automated demo (3 scenarios, ~3 min)
-python demo/run_demo.py
-
-# Visual dashboard after demo
-vigil dashboard --db demo/demo_history.db
+cd vigil
+pip install -e .
 ```
+
+### Step 2: Start the AI app (good knowledge base)
+
+Open a **new terminal** and run:
+
+```bash
+python demo/rag_app.py
+```
+
+You should see:
+```
+  Acme Corp RAG App
+  Provider: openrouter
+  Model:    openai/gpt-4o-mini
+  Context:  Full knowledge base
+  Running:  http://localhost:8500
+```
+
+### Step 3: Set the quality baseline
+
+Back in the **first terminal**:
+
+```bash
+vigil baseline -c demo/vigil.yaml --db demo/history.db
+```
+
+You should see all tests score 0.80-1.00:
+```
+  Baseline set:
+    return_policy             1.00
+    pricing_details           1.00
+    business_hours            1.00
+    security_certs            0.80
+    enterprise_vs_pro         1.00
+    support_sla               1.00
+```
+
+**This is your quality reference point — "this is what good looks like."**
+
+### Step 4: Verify quality is stable (run again)
+
+```bash
+vigil run -c demo/vigil.yaml --db demo/history.db
+```
+
+All tests should pass. Scores match baseline. No alerts. **Quality is stable.**
+
+### Step 5: Simulate data corruption (the key moment)
+
+Now stop the AI app (`Ctrl+C` in the second terminal) and restart with **corrupted knowledge base**:
+
+```bash
+python demo/rag_app.py --corrupt-context
+```
+
+You should see:
+```
+  Context:  CORRUPTED    ← this is the change
+```
+
+**This simulates:** someone edited the knowledge base docs, removed key details, left vague content. No code change. No deploy.
+
+### Step 6: Run vigil — watch it catch the degradation
+
+```bash
+vigil run -c demo/vigil.yaml --db demo/history.db
+```
+
+You should see:
+```
+    !!  return_policy             0.00  (baseline: 1.00)  -100% DEGRADED
+    !!  pricing_details           0.00  (baseline: 1.00)  -100% DEGRADED
+    !!  business_hours            0.00  (baseline: 1.00)  -100% DEGRADED
+    ...
+
+    !!! QUALITY ALERTS !!!
+    !! return_policy: score dropped 100.0% (1.00 -> 0.00)
+    !! pricing_details: score dropped 100.0% (1.00 -> 0.00)
+```
+
+**Vigil caught it.** No code changed. No deploy happened. The data changed and vigil detected the quality drop.
+
+### Step 7: View the dashboard
+
+```bash
+vigil dashboard --db demo/history.db
+```
+
+Open **http://localhost:9090** in your browser. You'll see:
+- Quality score chart showing the drop
+- Red alerts on degraded tests
+- Run history showing good → good → bad
+
+### Step 8: Fix the data and verify recovery
+
+Stop the corrupted app (`Ctrl+C`) and restart with good data:
+
+```bash
+python demo/rag_app.py
+```
+
+Run vigil again:
+```bash
+vigil run -c demo/vigil.yaml --db demo/history.db
+```
+
+Scores recover to 1.00. Dashboard shows the recovery. **Full cycle: healthy → degraded → detected → fixed → healthy.**
+
+### Step 9: Check history
+
+```bash
+vigil history --db demo/history.db
+```
+
+Shows all runs with scores — the full timeline of quality.
+
+---
+
+## Why Not Just Use LangSmith / Langfuse / Braintrust?
+
+**For most teams, you should.** They're better products with bigger teams and polished dashboards.
+
+Vigil is not a competitor. It's a different tool for a different job:
+
+> **LangSmith = comprehensive health checkup at the hospital**
+> **Vigil = a thermometer you check every morning at home**
+
+### When the thermometer is enough
+
+| Situation | LangSmith/Langfuse | Vigil |
+|---|---|---|
+| **Setup time** | Hours (install SDK, instrument code, configure) | **5 minutes (YAML + CLI)** |
+| **Code changes needed** | Yes — wrap LLM calls with their tracer | **None — tests from outside via HTTP** |
+| **Monitor an app you don't own** | Can't install SDK in someone else's code | **Just point at the URL** |
+| **Pre-launch (no users yet)** | Needs production traffic to analyze | **Sends its own test queries** |
+| **Cost** | Free tier → $39-249/month | **~$0.90/month** |
+| **Low-traffic features** | Not enough traffic for statistical analysis | **Tests every category every run** |
+
+### When you need the hospital
+
+| Situation | Use LangSmith/Langfuse |
+|---|---|
+| Full production observability | ✅ They trace every call |
+| Debug specific user conversations | ✅ They have trace viewers |
+| Enterprise (SOC2, RBAC, audit logs) | ✅ They have compliance features |
+| Analyze real user query patterns | ✅ They see actual traffic |
+
+### Best combo
+
+```
+Vigil ($0.90/month)      →  Catches data-driven quality drops proactively
++ Langfuse (free tier)   →  Traces production calls for debugging when vigil alerts
+
+Total: $0.90/month. Covers both proactive monitoring and reactive debugging.
+```
+
+**Start with the thermometer. Go to the hospital when the thermometer shows a fever.**
 
 ---
 
 ## CI/CD Integration
 
 ```yaml
-# .github/workflows/vigil.yml — runs on schedule, NOT on deploy
+# .github/workflows/vigil.yml
+# Key: triggered by SCHEDULE, not push — catches data changes between deploys
 name: AI Quality Monitor
 on:
   schedule:
-    - cron: '0 */6 * * *'    # every 6 hours — catches data changes between deploys
+    - cron: '0 */6 * * *'
 
 jobs:
   vigil:
@@ -392,8 +547,6 @@ jobs:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
 ```
 
-**Key: triggered by `schedule`, not `push`.** That's the whole point — catching what deploys don't trigger.
-
 ---
 
 ## MCP Integration
@@ -402,35 +555,11 @@ jobs:
 # Claude Code
 claude mcp add vigil -- python -m vigil_ai
 
-# Ask Claude: "Check my AI quality" / "Show quality history"
+# Then ask Claude:
+# "Check my AI quality"
+# "Show quality history for pricing"
+# "Set a new baseline"
 ```
-
----
-
-## vigil vs Eval Frameworks — When to Use What
-
-| Scenario | Best tool | Why |
-|---|---|---|
-| You push code, want to test before deploy | **CI evals (Promptfoo, DeepEval)** | Triggered by deploy, tests your code changes |
-| You run a reindex, want to verify after | **Eval hook in reindex pipeline** | Add eval step after reindex completes |
-| Content team edits docs in CMS | **vigil** | No pipeline exists to hook into |
-| External data source changes | **vigil** | Not your system, no trigger available |
-| Multiple teams update data independently | **vigil** | No unified pipeline across teams |
-| Slow quality drift over months | **vigil** | No single event to trigger evals, only trend reveals it |
-| You want to monitor production 24/7 | **vigil** | Runs on schedule regardless of what changed |
-
-| | CI Evals (Promptfoo, DeepEval) | vigil |
-|---|---|---|
-| **Triggered by** | Code deploys / pipeline hooks | **Time (every N hours)** |
-| **Catches** | Code bugs, model changes | **Data bugs, CMS edits, external changes, drift** |
-| **Requires** | Pipeline to hook into | **Just an HTTP endpoint** |
-| **Tracks trends** | No (point-in-time) | **Yes (baseline + drift detection)** |
-| **Cost** | Free | ~$0.90/month |
-
-**They're complementary.** CI evals for what you control. Vigil for what you don't.
-| **Use when** | You change prompts/models | **Data changes without deploys** |
-
-**They're complementary, not competing.** Use CI evals for code changes. Use vigil for everything else.
 
 ---
 
@@ -440,20 +569,21 @@ claude mcp add vigil -- python -m vigil_ai
 vigil/
 ├── src/vigil_ai/
 │   ├── config.py          # YAML config parser
-│   ├── runner.py          # HTTP test runner
+│   ├── runner.py          # HTTP test runner (any endpoint)
 │   ├── scorer.py          # LLM judge (OpenRouter/OpenAI/Gemini) + rule-based
-│   ├── tracker.py         # SQLite history + baselines + drift detection
-│   ├── alerter.py         # Console + webhook alerts
-│   ├── dashboard.py       # Visual dashboard (Chart.js)
+│   ├── tracker.py         # SQLite: history, baselines, drift detection
+│   ├── alerter.py         # Console + webhook (Slack/Discord)
+│   ├── dashboard.py       # Visual dashboard (Chart.js, dark theme)
 │   ├── cli.py             # CLI: run, watch, baseline, history, dashboard, init
 │   └── mcp_server.py      # MCP server for Claude Code / Cursor
-├── demo/                  # RAG app demo with degradation scenarios
+├── demo/                  # RAG app with good/corrupted data modes
 └── tests/                 # 16 tests (mock-based, zero API calls)
 ```
 
 - **Zero infrastructure** — SQLite + YAML. No server, no database, no cloud
-- **Any endpoint** — just HTTP. Works with any AI framework
+- **Any endpoint** — just HTTP. No SDK integration in your app
 - **5-minute setup** — `vigil init` → edit YAML → `vigil watch`
+- **~$0.90/month** — or $0 with rule-based scoring (no API key)
 
 ---
 
