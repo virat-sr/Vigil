@@ -262,6 +262,11 @@ def main():
     p_init.add_argument("-c", "--config", default=DEFAULT_CONFIG, help="Output path for YAML")
     p_init.add_argument("--force", action="store_true", help="Overwrite existing file")
 
+    # dashboard
+    p_dash = sub.add_parser("dashboard", help="Open the visual quality dashboard in your browser")
+    p_dash.add_argument("--db", default=DEFAULT_DB, help="Path to SQLite history database")
+    p_dash.add_argument("--port", type=int, default=9090, help="Dashboard port (default: 9090)")
+
     args = parser.parse_args()
 
     if args.command == "run":
@@ -274,6 +279,9 @@ def main():
         cmd_history(args)
     elif args.command == "init":
         cmd_init(args)
+    elif args.command == "dashboard":
+        from .dashboard import serve_dashboard
+        serve_dashboard(db_path=args.db, port=args.port)
     else:
         parser.print_help()
 
