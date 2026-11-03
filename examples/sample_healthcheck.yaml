@@ -1,0 +1,34 @@
+# ai-healthcheck — Sample test suite for the mock API server
+# Run the mock server first: python examples/mock_api_server.py
+
+name: "Mock RAG API"
+endpoint: "http://localhost:8000"
+response_field: "response"
+alert_threshold: 0.15
+scorer_model: "gemini-2.0-flash"
+timeout: 10
+
+tests:
+  - name: "return_policy"
+    query: "What is your return policy?"
+    expect:
+      contains: ["30 days", "refund"]
+      tone: "professional"
+
+  - name: "business_hours"
+    query: "What are your business hours?"
+    expect:
+      contains_numbers: true
+      no_hallucination: true
+
+  - name: "plan_comparison"
+    query: "Compare the Pro and Enterprise plans"
+    expect:
+      min_length: 100
+      grounded_in_context: true
+      contains_numbers: true
+
+  - name: "empty_query_handling"
+    query: ""
+    expect:
+      tone: "helpful"
