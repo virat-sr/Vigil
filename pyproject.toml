@@ -11,17 +11,20 @@ license = "MIT"
 requires-python = ">=3.10"
 dependencies = ["pyyaml>=6.0"]
 
-# Install the provider you use:
-#   pip install vigil-ai[openai]    — for OpenAI scoring
-#   pip install vigil-ai[gemini]    — for Gemini scoring
-#   pip install vigil-ai[all]       — both
+# Install the provider you use (with uv):
+#   uv sync --extra openai     — OpenAI / OpenRouter scoring (also used by the demo app)
+#   uv sync --extra gemini     — Gemini scoring
+#   uv sync --all-extras       — everything (openai, gemini, mcp)
 
 [project.optional-dependencies]
 openai = ["openai>=1.0"]
 gemini = ["google-genai>=1.0"]
 all = ["openai>=1.0", "google-genai>=1.0"]
-dev = ["pytest>=7.0"]
 mcp = ["mcp>=2.0"]
+
+[dependency-groups]
+# Installed automatically by `uv sync` / `uv run`
+dev = ["pytest>=7.0"]
 
 [project.scripts]
 vigil = "vigil_ai.cli:main"
@@ -29,3 +32,6 @@ vigil-mcp = "vigil_ai.mcp_server:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

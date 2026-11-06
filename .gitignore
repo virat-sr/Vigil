@@ -5,4 +5,10 @@ dist/
 build/
 *.db
 .pytest_cache/
+
+# Environment
 .env
+.venv/
+
+# OS
+.DS_Store

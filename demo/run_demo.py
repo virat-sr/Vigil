@@ -11,11 +11,11 @@ Proves vigil catches quality drops from real production changes:
 No tampering. No mocks. Real LLM API calls. Real quality differences.
 
 Requirements:
-    Set OPENROUTER_API_KEY in .env (or OPENAI_API_KEY / GOOGLE_API_KEY)
-    pip install vigil-ai[openai]
+    Set OPENROUTER_API_KEY in .env (the model names below are OpenRouter IDs)
+    uv sync --all-extras
 
-Usage:
-    python demo/run_demo.py
+Usage (from the repo root):
+    uv run python demo/run_demo.py
 """
 
 import os

@@ -1,8 +1,8 @@
 """Mock RAG API server for testing vigil.
 
 Two modes:
-  python mock_api_server.py           # good responses (detailed, accurate)
-  python mock_api_server.py --degrade # degraded responses (partial, wrong numbers)
+  uv run python examples/mock_api_server.py           # good responses (detailed, accurate)
+  uv run python examples/mock_api_server.py --degrade # degraded responses (partial, wrong numbers)
 """
 
 import argparse

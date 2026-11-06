@@ -2,11 +2,11 @@
 
 Supports OpenRouter (any model), OpenAI, or Gemini — auto-detects from env.
 
-Usage:
-    python demo/rag_app.py                                         # auto-detect provider
-    python demo/rag_app.py --model openai/gpt-4o-mini              # OpenRouter model
-    python demo/rag_app.py --model meta-llama/llama-3-8b-instruct  # free model (worse)
-    python demo/rag_app.py --corrupt-context                       # bad docs
+Usage (from the repo root, after `uv sync --all-extras`):
+    uv run python demo/rag_app.py                                         # auto-detect provider
+    uv run python demo/rag_app.py --model openai/gpt-4o-mini              # OpenRouter model
+    uv run python demo/rag_app.py --model meta-llama/llama-3-8b-instruct  # free model (worse)
+    uv run python demo/rag_app.py --corrupt-context                       # bad docs
 """
 
 import argparse

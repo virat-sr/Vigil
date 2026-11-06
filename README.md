@@ -53,23 +53,45 @@ Gradual drift     ──nothing──→   ???        ❌  ← vigil
 
 ## Quick Start
 
-### 1. Install
+This project uses [uv](https://docs.astral.sh/uv/) for Python, virtual environments and dependencies.
+
+### 1. Install uv (once per machine)
 
 ```bash
-pip install vigil-ai openai    # openai SDK needed for OpenRouter/OpenAI scoring
+curl -LsSf https://astral.sh/uv/install.sh | sh    # or: brew install uv
 ```
 
-### 2. Set API key
+### 2. Create the environment
 
 ```bash
-# .env (gitignored — never committed)
-OPENROUTER_API_KEY=sk-or-v1-your-key    # get free at openrouter.ai/keys
+git clone <repo-url> vigil && cd vigil
+uv sync --all-extras        # creates .venv/ (Python 3.13 per .python-version) + installs everything
 ```
 
-### 3. Create config
+`uv sync` installs vigil in editable mode plus `pytest`. `--all-extras` adds the `openai`, `gemini` and `mcp` SDKs.
+Only need one provider? Use `uv sync --extra openai` (also covers OpenRouter) or `uv sync --extra gemini`.
+
+Run any command inside the environment with `uv run …` (no activation needed), e.g. `uv run vigil --help`.
+If you prefer activating it: `source .venv/bin/activate`, then just `vigil …`.
+
+### 3. Set API key (optional)
 
 ```bash
-vigil init    # creates vigil.yaml
+cp .env.example .env        # .env is gitignored — never committed
+```
+
+Fill in **one** key in `.env` (priority: OpenRouter > OpenAI > Gemini). Keep comments on their own lines:
+
+```bash
+OPENROUTER_API_KEY=sk-or-v1-your-key
+```
+
+No key? Vigil falls back to free rule-based scoring. `.env` is read from the **current directory**, so run commands from the repo root.
+
+### 4. Create config
+
+```bash
+uv run vigil init    # creates vigil.yaml
 ```
 
 Edit `vigil.yaml` — point to your production endpoint, add queries your real users ask:
@@ -98,11 +120,11 @@ tests:
       contains: ["Monday", "Friday"]
 ```
 
-### 4. Set baseline + start monitoring
+### 5. Set baseline + start monitoring
 
 ```bash
-vigil baseline                # set quality reference point
-vigil watch --every 360       # check every 6 hours, forever
+uv run vigil baseline                # set quality reference point
+uv run vigil watch --every 360       # check every 6 hours, forever
 ```
 
 When quality drops:
@@ -266,6 +288,8 @@ vigil.yaml          →  Runner            →  Scorer           →  Tracker
 
 ## CLI Reference
 
+Prefix each command with `uv run` (e.g. `uv run vigil run`), or `source .venv/bin/activate` once and use them as-is.
+
 ```bash
 vigil init                         # create vigil.yaml template
 vigil baseline                     # run tests, set as quality reference
@@ -343,7 +367,7 @@ Checks `contains` keywords, `min_length`, `contains_numbers` deterministically. 
 ## Dashboard
 
 ```bash
-vigil dashboard --db vigil_history.db
+uv run vigil dashboard --db vigil_history.db
 # Open http://localhost:9090
 ```
 
@@ -358,24 +382,35 @@ Dark-themed visual dashboard showing:
 
 ## Demo: Step-by-Step (Record This for Video)
 
-Everything below runs in one terminal. No API key needed for the basic demo.
+The demo runs a tiny "Acme Corp" support bot on `http://localhost:8500`, sets a quality baseline,
+then breaks the bot's knowledge base and shows vigil catching it. You need **two terminals**, both opened in the repo root.
 
-### Step 1: Install
+Two ways to run the bot:
+
+| | Bot | API key | Scoring |
+|---|---|---|---|
+| **Path A — real LLM** (best for video) | `demo/rag_app.py` — real LLM answering from docs | Required (`.env`) | LLM-as-judge |
+| **Path B — offline** | `examples/mock_api_server.py` — canned answers | Not needed | Rule-based (if `.env` has no key) |
+
+### Step 0: One-time setup
 
 ```bash
 cd vigil
-pip install -e .
+uv sync --all-extras          # create .venv and install vigil + openai/gemini SDKs + pytest
+cp .env.example .env          # then edit .env and paste your key (Path A only)
+uv run pytest -q              # optional sanity check — expect "16 passed"
+rm -f demo/history.db         # start the demo with a clean history
 ```
 
-### Step 2: Start the AI app (good knowledge base)
-
-Open a **new terminal** and run:
+### Step 1: Start the AI app with the GOOD knowledge base — Terminal 2
 
 ```bash
-python demo/rag_app.py
+uv run python demo/rag_app.py                    # Path A (real LLM)
+# or
+uv run python examples/mock_api_server.py        # Path B (offline)
 ```
 
-You should see:
+Path A prints:
 ```
   Acme Corp RAG App
   Provider: openrouter
@@ -384,103 +419,123 @@ You should see:
   Running:  http://localhost:8500
 ```
 
-### Step 3: Set the quality baseline
+Leave it running.
 
-Back in the **first terminal**:
+### Step 2: Set the quality baseline — Terminal 1
 
 ```bash
-vigil baseline -c demo/vigil.yaml --db demo/history.db
+uv run vigil baseline -c demo/vigil.yaml --db demo/history.db
 ```
 
-You should see all tests score 0.80-1.00:
+All tests should score high (≈0.80–1.00):
 ```
   Baseline set:
     return_policy             1.00
     pricing_details           1.00
     business_hours            1.00
-    security_certs            0.80
-    enterprise_vs_pro         1.00
+    security_certs            1.00
+    enterprise_features       1.00
     support_sla               1.00
 ```
 
 **This is your quality reference point — "this is what good looks like."**
 
-### Step 4: Verify quality is stable (run again)
+### Step 3: Verify quality is stable — Terminal 1
 
 ```bash
-vigil run -c demo/vigil.yaml --db demo/history.db
+uv run vigil run -c demo/vigil.yaml --db demo/history.db
 ```
 
-All tests should pass. Scores match baseline. No alerts. **Quality is stable.**
+Scores match the baseline. No alerts. **Quality is stable.**
 
-### Step 5: Simulate data corruption (the key moment)
+### Step 4: Corrupt the knowledge base (the key moment) — Terminal 2
 
-Now stop the AI app (`Ctrl+C` in the second terminal) and restart with **corrupted knowledge base**:
+Press `Ctrl+C` to stop the app, then restart it with bad data:
 
 ```bash
-python demo/rag_app.py --corrupt-context
+uv run python demo/rag_app.py --corrupt-context            # Path A
+# or
+uv run python examples/mock_api_server.py --degrade        # Path B
+```
+
+Path A prints `Context:  CORRUPTED` — **this is the change.**
+It simulates someone editing the knowledge-base docs: old prices, shorter return window, vague security info. No code change. No deploy.
+
+### Step 5: Run vigil — watch it catch the degradation — Terminal 1
+
+```bash
+uv run vigil run -c demo/vigil.yaml --db demo/history.db
 ```
 
 You should see:
 ```
-  Context:  CORRUPTED    ← this is the change
-```
-
-**This simulates:** someone edited the knowledge base docs, removed key details, left vague content. No code change. No deploy.
-
-### Step 6: Run vigil — watch it catch the degradation
-
-```bash
-vigil run -c demo/vigil.yaml --db demo/history.db
-```
-
-You should see:
-```
-    !!  return_policy             0.00  (baseline: 1.00)  -100% DEGRADED
-    !!  pricing_details           0.00  (baseline: 1.00)  -100% DEGRADED
-    !!  business_hours            0.00  (baseline: 1.00)  -100% DEGRADED
+    !!  return_policy             0.29  (baseline: 1.00)  -71% DEGRADED
+    !!  pricing_details           0.29  (baseline: 1.00)  -71% DEGRADED
     ...
 
-    !!! QUALITY ALERTS !!!
-    !! return_policy: score dropped 100.0% (1.00 -> 0.00)
-    !! pricing_details: score dropped 100.0% (1.00 -> 0.00)
+  !!! QUALITY ALERTS !!!
+  !! return_policy: score dropped 71.0% (1.00 -> 0.29)
+  !! pricing_details: score dropped 71.0% (1.00 -> 0.29)
 ```
 
+(Exact numbers vary with the judge model; any drop beyond 15% raises an alert.)
 **Vigil caught it.** No code changed. No deploy happened. The data changed and vigil detected the quality drop.
 
-### Step 7: View the dashboard
+### Step 6: Fix the data and verify recovery
+
+Terminal 2 — `Ctrl+C`, then restart with good data:
 
 ```bash
-vigil dashboard --db demo/history.db
+uv run python demo/rag_app.py                    # Path A
+# or
+uv run python examples/mock_api_server.py        # Path B
 ```
 
-Open **http://localhost:9090** in your browser. You'll see:
-- Quality score chart showing the drop
-- Red alerts on degraded tests
-- Run history showing good → good → bad
-
-### Step 8: Fix the data and verify recovery
-
-Stop the corrupted app (`Ctrl+C`) and restart with good data:
+Terminal 1:
 
 ```bash
-python demo/rag_app.py
+uv run vigil run -c demo/vigil.yaml --db demo/history.db
 ```
 
-Run vigil again:
-```bash
-vigil run -c demo/vigil.yaml --db demo/history.db
-```
+Scores recover to baseline. **Full cycle: healthy → degraded → detected → fixed → healthy.**
 
-Scores recover to 1.00. Dashboard shows the recovery. **Full cycle: healthy → degraded → detected → fixed → healthy.**
-
-### Step 9: Check history
+### Step 7: Check history — Terminal 1
 
 ```bash
-vigil history --db demo/history.db
+uv run vigil history --db demo/history.db
+uv run vigil history --db demo/history.db --test pricing_details
 ```
 
-Shows all runs with scores — the full timeline of quality.
+### Step 8: View the dashboard — Terminal 1
+
+```bash
+uv run vigil dashboard --db demo/history.db
+```
+
+Open **http://localhost:9090** (stop with `Ctrl+C`). You'll see the score chart dropping and recovering,
+red alerts on degraded tests, and run history good → good → bad → good. Click any run for its details.
+
+Finally, stop the app in Terminal 2 with `Ctrl+C`.
+
+### One-command variant (OpenRouter key required)
+
+```bash
+uv run python demo/run_demo.py
+```
+
+Runs three scenarios automatically — good model baseline, swap to a tiny free model, corrupted docs — and prints the history.
+It uses OpenRouter model IDs, so it needs `OPENROUTER_API_KEY` in `.env`. Results go to `demo/demo_history.db`
+(view with `uv run vigil dashboard --db demo/demo_history.db`).
+
+### Troubleshooting
+
+| Symptom | Fix |
+|---|---|
+| `Connection refused` / all tests `[ERR]` | The app in Terminal 2 isn't running, or is on a port other than 8500 |
+| `Address already in use` | Something else is on 8500 — stop it, or `lsof -i :8500` to find it |
+| `RuntimeError: Set OPENROUTER_API_KEY...` | `.env` missing or empty — Path A needs a key (or use Path B) |
+| Scoring says `rule-based (no API key)` | Expected for Path B; for Path A, run commands from the repo root so `.env` is found |
+| Old runs show up in history/dashboard | `rm -f demo/history.db` and start over from Step 1 |
 
 ---
 
@@ -541,8 +596,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: pip install vigil-ai openai
-      - run: vigil run
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --extra openai
+      - run: uv run vigil run
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
 ```
@@ -553,7 +609,7 @@ jobs:
 
 ```bash
 # Claude Code
-claude mcp add vigil -- python -m vigil_ai
+claude mcp add vigil -- uv run --directory /absolute/path/to/vigil python -m vigil_ai
 
 # Then ask Claude:
 # "Check my AI quality"
@@ -577,7 +633,11 @@ vigil/
 │   ├── cli.py             # CLI: run, watch, baseline, history, dashboard, init
 │   └── mcp_server.py      # MCP server for Claude Code / Cursor
 ├── demo/                  # RAG app with good/corrupted data modes
-└── tests/                 # 16 tests (mock-based, zero API calls)
+├── examples/              # Offline mock API server (no key needed)
+├── tests/                 # 16 tests (mock-based, zero API calls) — `uv run pytest`
+├── pyproject.toml         # deps + extras; uv.lock pins exact versions
+├── .python-version        # Python version uv uses for .venv
+└── .env.example           # copy to .env and add your API key
 ```
 
 - **Zero infrastructure** — SQLite + YAML. No server, no database, no cloud
